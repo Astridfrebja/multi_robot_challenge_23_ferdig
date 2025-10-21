@@ -98,13 +98,13 @@ class GoalNavigator:
             self.stop_robot()  # STOP roboten når målet er nådd
             return True
 
-        # Debug logging for navigation
+        # Debug logging for navigation - reduced frequency
         if hasattr(self, '_debug_counter'):
             self._debug_counter += 1
         else:
             self._debug_counter = 1
         
-        if self._debug_counter % 10 == 0:  # Log hver 10. gang (more frequent)
+        if self._debug_counter % 100 == 0:  # Log hver 100. gang (much reduced frequency)
             distance = math.sqrt(
                 (self.target_position[0] - self.robot_position[0])**2 +
                 (self.target_position[1] - self.robot_position[1])**2
@@ -125,8 +125,13 @@ class GoalNavigator:
             (self.target_position[1] - self.robot_position[1])**2
         )
         
-        # Debug logging - log all the time when we have a goal
-        self.node.get_logger().info(f'🎯 Goal check: robot=({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}), target=({self.target_position[0]:.2f}, {self.target_position[1]:.2f}), distance={distance:.3f}m, threshold={self.GOAL_THRESHOLD}m')
+        # Debug logging - reduced frequency
+        if not hasattr(self, '_goal_check_counter'):
+            self._goal_check_counter = 0
+        self._goal_check_counter += 1
+        
+        if self._goal_check_counter % 50 == 0:  # Log every 50th time
+            self.node.get_logger().info(f'🎯 Goal check: robot=({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}), target=({self.target_position[0]:.2f}, {self.target_position[1]:.2f}), distance={distance:.3f}m, threshold={self.GOAL_THRESHOLD}m')
         
         return distance <= self.GOAL_THRESHOLD
 
@@ -231,9 +236,13 @@ class GoalNavigator:
 
     def publish_twist(self, linear_x: float, angular_z: float):
         """Publiserer bevegelseskommandoer"""
-        # Debug logging
-        if linear_x != 0.0 or angular_z != 0.0:
+        # Only log when cmd_vel changes significantly
+        if not hasattr(self, '_last_published_cmd'):
+            self._last_published_cmd = (0.0, 0.0)
+        
+        if abs(linear_x - self._last_published_cmd[0]) > 0.1 or abs(angular_z - self._last_published_cmd[1]) > 0.1:
             self.node.get_logger().info(f'🎯 Publishing cmd_vel: linear={linear_x:.2f}, angular={angular_z:.2f}')
+            self._last_published_cmd = (linear_x, angular_z)
         
         twist_msg = Twist()
         twist_msg.linear.x = linear_x

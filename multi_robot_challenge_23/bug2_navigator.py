@@ -4,312 +4,251 @@
 import math
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
-from geometry_msgs.msg import Twist
+from .wall_follower import WallFollower
+from .goal_navigator import GoalNavigator # Antas å eksistere
 
 class Bug2Navigator:
     """
-    BUG2 navigasjonsalgoritme - EN ansvar: BUG2 navigasjon
-    
-    Single Responsibility: Kun BUG2 algoritme implementasjon
+    BUG2-koordinator (Controller) - Administrerer Bug2-tilstander og DELEGERER bevegelse.
     """
     
     # --- INNSTILLINGER ---
-    FORWARD_SPEED = 0.3
-    TURN_SPEED = 0.5
-    THRESHOLD = 0.8
-    GOAL_THRESHOLD = 0.5
-    P_GAIN = 1.0
+    FRONT_THRESHOLD = 0.8       # Avstand for å detektere hindring og bytte til WALL_FOLLOWING
+    GOAL_THRESHOLD = 0.3        # Avstand for å betrakte målet som nådd
+    ANGLE_TOLERANCE = 20        # Vinkeltoleranse for M-linje (grader)
+    MIN_DIST_CHECK = 1.0        # Minimum avstand for å sjekke M-linje
     
     # BUG2 States
     GO_TO_GOAL = "GO_TO_GOAL"
     WALL_FOLLOWING = "WALL_FOLLOWING"
-    GOAL_REACHED = "GOAL_REACHED"
     
-    def __init__(self, node_ref: Node):
+    def __init__(self, node_ref: Node, wall_follower: WallFollower, goal_navigator: GoalNavigator):
         self.node = node_ref
         
-        # BUG2 state
+        # Delegerte Navigatører
+        self.wall_follower = wall_follower
+        self.goal_navigator = goal_navigator
+        
         self.state = self.GO_TO_GOAL
         self.target_position = None
         self.robot_position = (0.0, 0.0)
         self.robot_orientation = 0.0
         
-        # BUG2 specific variables
-        self.hit_point = None  # Posisjon hvor roboten traff hindringen
-        self.leave_point = None  # Posisjon hvor roboten forlot hindringen
-        self.m_line = None  # Linje fra start til mål
-        self.start_position = None
-        self.wall_following_direction = 1  # 1 for høyre, -1 for venstre
+        # BUG2 spesifikke variabler
+        self.start_x = 0.0          # Startposisjon X
+        self.start_y = 0.0          # Startposisjon Y
+        self.target_x = 0.0         # Målposisjon X
+        self.target_y = 0.0         # Målposisjon Y
+        self.M_start_x = 0.0        # M-linje start X
+        self.M_start_y = 0.0        # M-linje start Y
+        self.M_start_dist_to_goal = float('inf')  # Avstand til mål ved M-linje start
+        self.M_line_angle = 0.0     # Vinkel til M-linjen
+        self.regions = {}           # Laser scan regions
         
-        # Wall following state
-        self.is_turning = False
-        self.turn_time_start = None
-        
-        # Setup publisher
-        self.cmd_vel_publisher = self.node.create_publisher(Twist, 'cmd_vel', 10)
-        
-        self.node.get_logger().info('🐛 Bug2Navigator initialisert')
+        self.node.get_logger().info('🐛 Delegert Bug2Navigator initialisert')
 
     def set_goal(self, position: tuple):
-        """Sett nytt mål for BUG2 navigasjon"""
+        """Setter nytt mål og oppdaterer GoalNavigator."""
+        if self.target_position == position and self.target_position is not None:
+            return
+
         self.target_position = position
+        self.target_x = position[0]
+        self.target_y = position[1]
+        self.start_x = self.robot_position[0]
+        self.start_y = self.robot_position[1]
         self.state = self.GO_TO_GOAL
-        self.hit_point = None
-        self.leave_point = None
-        self.m_line = None
-        self.start_position = self.robot_position
-        self.node.get_logger().info(f'🐛 BUG2: Nytt mål satt: {position}')
+        
+        # Reset M-line variables
+        self.M_start_dist_to_goal = float('inf')
+        self.M_start_x = 0.0
+        self.M_start_y = 0.0
+        
+        # Calculate M-line angle
+        self.M_line_angle = math.atan2(self.target_y - self.start_y, self.target_x - self.start_x)
+        
+        self.goal_navigator.set_goal(position)
+        
+        self.node.get_logger().info(f'🐛 BUG2: Nytt mål satt: {position}. Starter GO_TO_GOAL.')
 
     def clear_goal(self):
-        """Fjern aktivt mål"""
+        """Fjern aktivt mål og stopp bevegelse."""
         self.target_position = None
+        self.target_x = 0.0
+        self.target_y = 0.0
         self.state = self.GO_TO_GOAL
-        self.node.get_logger().info('🐛 BUG2: Mål fjernet')
+        self.M_start_dist_to_goal = float('inf')
+        self.M_start_x = 0.0
+        self.M_start_y = 0.0
+        self.goal_navigator.clear_goal()
+        self.stop_robot()
 
     def update_robot_pose(self, position: tuple, orientation: float):
-        """Oppdater robot posisjon og orientering"""
+        """Oppdater robot posisjon og orientering."""
         self.robot_position = position
         self.robot_orientation = orientation
-        
-        # Sett start posisjon hvis ikke satt
-        if self.start_position is None:
-            self.start_position = position
+        self.goal_navigator.update_robot_pose(position, orientation)
 
     def navigate(self, msg: LaserScan) -> bool:
         """
-        BUG2 navigasjon hovedfunksjon
-        
-        Returns:
-            bool: True hvis mål er nådd
+        Hovedfunksjon: Utfører tilstandsoverganger og delegerer bevegelse.
         """
         if not self.target_position:
+            self.stop_robot()
             return False
 
-        # Sjekk om mål er nådd
-        if self.is_goal_reached():
-            self.node.get_logger().info('🐛 BUG2: GOAL REACHED!')
-            self.clear_goal()
+        # Process laser scan for obstacle detection
+        self.process_laser_scan(msg)
+
+        # 1. Sjekk om mål er nådd
+        current_dist_to_goal = self.get_current_distance_to_goal()
+        if current_dist_to_goal < self.GOAL_THRESHOLD:
+            self.node.get_logger().info(f"🎯 Målet nådd! Avstand: {current_dist_to_goal:.2f}")
+            self.stop_robot()
             return True
 
-        # BUG2 state machine
+        # 2. State Machine
         if self.state == self.GO_TO_GOAL:
-            self.go_to_goal_state(msg)
-        elif self.state == self.WALL_FOLLOWING:
-            self.wall_following_state(msg)
+            self._go_to_goal_state(msg)
         
+        elif self.state == self.WALL_FOLLOWING:
+            self._wall_following_state(msg)
+            
         return False
 
-    def go_to_goal_state(self, msg: LaserScan):
-        """GO_TO_GOAL state - naviger direkte mot mål"""
-        # Hent sensor data
-        dL = self._range_at_deg(msg, +15.0)
-        dR = self._range_at_deg(msg, -15.0)
-        dF = self._range_at_deg(msg, 0.0)
-        
-        # Sjekk for hindringer
-        if dF < self.THRESHOLD:
-            # Hindring detektert - bytt til wall following
-            self.hit_point = self.robot_position
-            self.state = self.WALL_FOLLOWING
-            self.is_turning = True
-            self.turn_time_start = self.node.get_clock().now()
-            self.node.get_logger().info(f'🐛 BUG2: Hindring detektert ved {self.hit_point} - bytter til wall following')
-            return
-        
-        # Naviger mot mål
-        self.navigate_towards_goal()
+    # --- BUG2 STATE LOGIKK OG DELEGERING ---
 
-    def wall_following_state(self, msg: LaserScan):
-        """WALL_FOLLOWING state - følg vegg til m-line"""
-        # Hent sensor data
-        dL = self._range_at_deg(msg, +15.0)
-        dR = self._range_at_deg(msg, -15.0)
-        dF = self._range_at_deg(msg, 0.0)
+    def _go_to_goal_state(self, msg: LaserScan):
+        """Tilstand: Gå direkte mot målet. Bytter til WALL_FOLLOWING ved hindring."""
         
-        # Sjekk om vi er tilbake på m-line og nærmere målet
-        if self.is_on_m_line() and self.is_closer_to_goal():
-            self.leave_point = self.robot_position
-            self.state = self.GO_TO_GOAL
-            self.is_turning = False
-            self.node.get_logger().info(f'🐛 BUG2: Tilbake på m-line ved {self.leave_point} - bytter til go-to-goal')
-            return
+        front_distance = self.regions.get('front', 10.0)
         
-        # Fortsett wall following
-        self.follow_wall(msg)
-
-    def navigate_towards_goal(self):
-        """Naviger direkte mot mål"""
-        if not self.target_position:
-            return
+        # Only log Go-To-Goal state every 20th time
+        if not hasattr(self, '_go_to_goal_log_counter'):
+            self._go_to_goal_log_counter = 0
+        self._go_to_goal_log_counter += 1
         
-        # Beregn retning til mål
-        dx = self.target_position[0] - self.robot_position[0]
-        dy = self.target_position[1] - self.robot_position[1]
-        distance_to_goal = math.sqrt(dx*dx + dy*dy)
+        if self._go_to_goal_log_counter % 50 == 0:
+            self.node.get_logger().info(
+                f'🎯 GO_TO_GOAL: front_dist={front_distance:.2f}m, threshold={self.FRONT_THRESHOLD}m, '
+                f'target={self.target_position}, robot={self.robot_position}'
+            )
         
-        # Beregn ønsket heading
-        desired_heading = math.atan2(dy, dx)
-        heading_error = desired_heading - self.robot_orientation
-        
-        # Normaliser vinkel
-        heading_error = self.normalize_angle(heading_error)
-        
-        # P-kontroll for heading
-        angular_z = self.P_GAIN * heading_error
-        
-        # Adaptiv lineær hastighet
-        linear_x = self.calculate_adaptive_speed(distance_to_goal)
-        
-        self.publish_twist(linear_x, angular_z)
-
-    def follow_wall(self, msg: LaserScan):
-        """Wall following logikk"""
-        dL = self._range_at_deg(msg, +15.0)
-        dR = self._range_at_deg(msg, -15.0)
-        dF = self._range_at_deg(msg, 0.0)
-        
-        # Beregn elapsed time for turning
-        elapsed = 0.0
-        if self.is_turning and self.turn_time_start:
-            elapsed = (self.node.get_clock().now() - self.turn_time_start).nanoseconds / 1e9
-        
-        linear_x = 0.0
-        angular_z = 0.0
-        
-        if self.is_turning:
-            # Fortsett å svinge
-            if elapsed < 2.0:
-                linear_x = 0.0
-                angular_z = self.TURN_SPEED
-            else:
-                self.is_turning = False
-                self.turn_time_start = None
-        else:
-            # Wall following logikk
-            if dF < self.THRESHOLD:
-                # Hindring foran - sving
-                self.is_turning = True
-                self.turn_time_start = self.node.get_clock().now()
-                linear_x = 0.0
-                angular_z = self.TURN_SPEED
-            elif dL > self.THRESHOLD and dR > self.THRESHOLD:
-                # Fri vei - gå fremover
-                linear_x = self.FORWARD_SPEED
-                angular_z = 0.0
-            elif dL <= self.THRESHOLD and dR > self.THRESHOLD:
-                # Vegg til venstre - sving høyre
-                linear_x = self.FORWARD_SPEED * 0.5
-                angular_z = -0.3
-            elif dR <= self.THRESHOLD and dL > self.THRESHOLD:
-                # Vegg til høyre - sving venstre
-                linear_x = self.FORWARD_SPEED * 0.5
-                angular_z = 0.3
-            else:
-                # Begge sider har hindringer - sving
-                linear_x = 0.0
-                angular_z = self.TURN_SPEED
-        
-        self.publish_twist(linear_x, angular_z)
-
-    def is_goal_reached(self) -> bool:
-        """Sjekk om mål er nådd"""
-        if not self.target_position:
-            return False
-        
-        distance = math.sqrt(
-            (self.target_position[0] - self.robot_position[0])**2 +
-            (self.target_position[1] - self.robot_position[1])**2
-        )
-        
-        return distance <= self.GOAL_THRESHOLD
-
-    def is_on_m_line(self) -> bool:
-        """Sjekk om roboten er på m-line (linje fra start til mål)"""
-        if not self.target_position or not self.start_position:
-            return False
-        
-        # Beregn avstand fra robot til m-line
-        distance_to_m_line = self.distance_to_line(
-            self.start_position, self.target_position, self.robot_position
-        )
-        
-        # Toleranse for å være "på" m-line
-        tolerance = 0.3
-        return distance_to_m_line <= tolerance
-
-    def is_closer_to_goal(self) -> bool:
-        """Sjekk om roboten er nærmere målet enn hit_point"""
-        if not self.hit_point or not self.target_position:
-            return False
-        
-        distance_from_hit = math.sqrt(
-            (self.target_position[0] - self.hit_point[0])**2 +
-            (self.target_position[1] - self.hit_point[1])**2
-        )
-        
-        distance_from_current = math.sqrt(
-            (self.target_position[0] - self.robot_position[0])**2 +
-            (self.target_position[1] - self.robot_position[1])**2
-        )
-        
-        return distance_from_current < distance_from_hit
-
-    def distance_to_line(self, line_start: tuple, line_end: tuple, point: tuple) -> float:
-        """Beregn avstand fra punkt til linje"""
-        x0, y0 = point
-        x1, y1 = line_start
-        x2, y2 = line_end
-        
-        # Avstand fra punkt til linje formel
-        numerator = abs((y2 - y1) * x0 - (x2 - x1) * y0 + x2 * y1 - y2 * x1)
-        denominator = math.sqrt((y2 - y1)**2 + (x2 - x1)**2)
-        
-        if denominator == 0:
-            return 0
-        
-        return numerator / denominator
-
-    def calculate_adaptive_speed(self, distance_to_goal: float) -> float:
-        """Beregn adaptiv hastighet basert på avstand til mål"""
-        if distance_to_goal > 2.0:
-            return self.FORWARD_SPEED
-        elif distance_to_goal > 1.0:
-            return self.FORWARD_SPEED * 0.7
-        else:
-            return self.FORWARD_SPEED * 0.4
-
-    def normalize_angle(self, angle: float) -> float:
-        """Normaliser vinkel til [-π, π]"""
-        while angle > math.pi:
-            angle -= 2 * math.pi
-        while angle < -math.pi:
-            angle += 2 * math.pi
-        return angle
-
-    def _range_at_deg(self, scan: LaserScan, deg: float, default: float = 100.0) -> float:
-        """Hent avstand ved vinkel (grader) fra LIDAR"""
-        if scan is None or not scan.ranges:
-            return default
-        
-        rad = math.radians(deg)
-        idx = int(round((rad - scan.angle_min) / scan.angle_increment))
-        
-        if idx < 0 or idx >= len(scan.ranges):
-            return default
-        
-        d = scan.ranges[idx]
-        if d is None or math.isnan(d) or math.isinf(d) or d == 0.0:
-            return default
+        if front_distance < self.FRONT_THRESHOLD:
+            # TRANSISJON: GO_TO_GOAL -> WALL_FOLLOWING
+            self.node.get_logger().warn(f"🛑 BUG2: Hinder funnet ({front_distance:.2f} m). Bytt til Wall Follow.")
             
-        return float(d)
+            # Set M-line start point
+            self.M_start_x = self.robot_position[0]
+            self.M_start_y = self.robot_position[1]
+            self.M_start_dist_to_goal = self.get_current_distance_to_goal()
+            
+            # Change state
+            self.state = self.WALL_FOLLOWING
+            return
+        
+        # DELEGER til GoalNavigator
+        self.goal_navigator.navigate_to_goal(msg) 
 
-    def publish_twist(self, linear_x: float, angular_z: float):
-        """Publiserer bevegelseskommandoer"""
-        twist_msg = Twist()
-        twist_msg.linear.x = linear_x
-        twist_msg.angular.z = angular_z
-        self.cmd_vel_publisher.publish(twist_msg)
+    def _wall_following_state(self, msg: LaserScan):
+        """Tilstand: Følg veggen til exit-kriteriene er møtt."""
+        
+        current_dist_to_goal = self.get_current_distance_to_goal()
+        
+        # Sjekk for leave point
+        is_on_line = self.is_on_M_line()
+        is_closer_to_goal = current_dist_to_goal < self.M_start_dist_to_goal
 
+        # Only log wall following state every 15th time
+        if not hasattr(self, '_wall_follow_log_counter'):
+            self._wall_follow_log_counter = 0
+        self._wall_follow_log_counter += 1
+        
+        if self._wall_follow_log_counter % 30 == 0:
+            self.node.get_logger().info(
+                f'🐛 WALL_FOLLOWING: on_m_line={is_on_line}, closer_to_goal={is_closer_to_goal}, '
+                f'current_dist={current_dist_to_goal:.2f}, M_start_dist={self.M_start_dist_to_goal:.2f}'
+            )
+
+        # Alternative exit: if front is clear and we're closer to goal, exit wall following
+        front_distance = self.regions.get('front', 10.0)
+        
+        if is_on_line and is_closer_to_goal:
+            self.node.get_logger().warn(
+                f"✅ BUG2: Kan forlate vegg: På M-linjen OG nærmere målet. "
+                f"Nåværende avstand: {current_dist_to_goal:.2f}, "
+                f"M_start avstand: {self.M_start_dist_to_goal:.2f}"
+            )
+            self.state = self.GO_TO_GOAL
+            return
+        elif front_distance > self.FRONT_THRESHOLD * 1.5 and is_closer_to_goal:
+            # Alternative exit: front is clear and we're closer to goal
+            self.node.get_logger().warn(
+                f"✅ BUG2: Front fri og nærmere målet. Front: {front_distance:.2f}m, "
+                f"Nåværende avstand: {current_dist_to_goal:.2f}, M_start: {self.M_start_dist_to_goal:.2f}"
+            )
+            self.state = self.GO_TO_GOAL
+            return
+        
+        if current_dist_to_goal > (self.M_start_dist_to_goal + 4.0): 
+            self.node.get_logger().error("❌ BUG2: Gikk for langt vekk fra målet under veggfølging. Stopper navigasjon.")
+            self.stop_robot()
+            return
+            
+        # Fortsett wall following - DELEGER til WallFollower
+        self.wall_follower.follow_wall(msg)
+
+    # --- BUG2 HELPER METHODS ---
+    
+    def process_laser_scan(self, msg: LaserScan):
+        """Process laser scan and update regions"""
+        import numpy as np
+        ranges = np.array(msg.ranges)
+        n = len(ranges)
+        front_ranges = np.concatenate((ranges[0:int(n*0.05)], ranges[int(n*0.95):]))
+        front_ranges[np.isinf(front_ranges)] = 10.0 
+        self.regions['front'] = np.min(front_ranges) if len(front_ranges) > 0 else 10.0
+
+    def get_current_distance_to_goal(self) -> float:
+        """Get current distance to goal"""
+        if not self.target_position:
+            return float('inf')
+        return math.hypot(self.target_x - self.robot_position[0], self.target_y - self.robot_position[1])
+
+    def is_on_M_line(self) -> bool:
+        """Check if robot is on M-line - simplified version"""
+        if not self.target_position:
+            return False
+
+        current_x = self.robot_position[0]
+        current_y = self.robot_position[1]
+        
+        # Vinkel fra robotens nåværende posisjon til målet
+        angle_to_target = math.atan2(self.target_y - current_y, self.target_x - current_x)
+        
+        # Vinkel mellom M-linjen og robotens siktlinje til målet
+        angle_diff = abs(self.normalize_angle(angle_to_target - self.M_line_angle))
+        
+        # Much more lenient angle tolerance (60 degrees instead of 20)
+        ANGLE_TOLERANCE_RAD = math.radians(60)  # Increased from 20 to 60 degrees
+        dist_to_goal = self.get_current_distance_to_goal()
+        
+        # Simplified Bug2 Leave-kriterium - just check if we're closer and roughly on the right path
+        if angle_diff < ANGLE_TOLERANCE_RAD and dist_to_goal < self.M_start_dist_to_goal:
+            self.node.get_logger().info(f"🐛 Nær M-linjen: Vinkelavvik: {math.degrees(angle_diff):.1f} deg, Nåværende dist: {dist_to_goal:.2f} m.")
+            return True
+        return False
+        
+    def normalize_angle(self, angle):
+        """Normalize angle to [-π, π]"""
+        angle = math.fmod(angle + math.pi, 2 * math.pi)
+        if angle < 0:
+            angle += 2 * math.pi
+        return angle - math.pi
+    
+    # --- KONTROLL ---
+    
     def stop_robot(self):
-        """Stopper robot bevegelse"""
-        self.publish_twist(0.0, 0.0)
+        """Stopper robot bevegelse via de delegerte navigatørene."""
+        self.goal_navigator.stop_robot()
+        self.wall_follower.stop_robot()

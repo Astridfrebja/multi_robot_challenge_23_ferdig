@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import math
+import numpy as np
 from rclpy.node import Node
 from geometry_msgs.msg import Twist
 from sensor_msgs.msg import LaserScan
@@ -10,26 +11,49 @@ class WallFollower:
     """
     Wall Following klasse - EN ansvar: Wall following navigasjon
     
-    Single Responsibility: Kun wall following logikk
+    Single Responsibility:  Kun wall following logikk
     """
     
+    # Tilstandsdefinisjoner
+    STATE_TURN_LEFT = 0      # Vegg foran, må snu unna
+    STATE_FOLLOW_WALL = 1    # Kjør parallelt og korriger kurs
+    STATE_TURN_RIGHT = 2     # Veggen har stoppet, må snu
+    
     # --- INNSTILLINGER ---
-    FORWARD_SPEED = 0.3       # Standard hastighet fremover
-    TURN_SPEED = 0.5          # Standard rotasjonshastighet
-    THRESHOLD = 0.8           # Avstand for kollisjonsunngåelse
-    WALL_DISTANCE = 0.5       # Ønsket avstand fra vegg
+    WALL_DISTANCE = 0.5      # Ønsket avstand fra veggen 
+    FRONT_THRESHOLD = 0.8    # Reagere på veggen foran.
+    KP_ANGULAR = 0.3         # P-kontroller for vinkelstyring
+    LINEAR_SPEED = 0.3       # Konstant fremoverhastighet
+    MAX_RANGE = 3.5          
+    TURN_LEFT_SPEED_ANG = 0.8 # Svingehastighet for innvendige hjørner (økt)
+    TURN_LEFT_SPEED_LIN = 0.0 # Ingen fremoverfart under sving
+    
+    def get_front_distance(self, scan: LaserScan) -> float:
+        """Hjelpefunksjon for å hente avstand foran roboten."""
+        return self._range_at_deg(scan, 0.0)
     
     def __init__(self, node_ref: Node, sensor_manager=None):
         self.node = node_ref
         self.sensor_manager = sensor_manager
         
         # Wall following state
-        self.is_turning = False
-        self.turn_time_start = None
+        self.state = self.STATE_FOLLOW_WALL
+        self.regions = {}
+        
+        # Timing for state transitions
+        self.state_start_time = None
+        self.turn_timeout = 3.0  # Maximum time to spend in TURN_LEFT
         
         # Setup publisher
         from geometry_msgs.msg import Twist
         self.cmd_vel_publisher = self.node.create_publisher(Twist, 'cmd_vel', 10)
+        
+        # State actions mapping
+        self.state_actions = {
+            self.STATE_TURN_LEFT: self.do_turn_left,
+            self.STATE_FOLLOW_WALL: self.do_follow_wall,
+            self.STATE_TURN_RIGHT: self.do_turn_right,
+        }
         
         self.node.get_logger().info('🧱 WallFollower initialisert')
 
@@ -51,90 +75,128 @@ class WallFollower:
             self.stop_robot()
             return
 
-        if target_direction:
-            self.guided_wall_following(msg, target_direction)
+        # Process laser scan data
+        self.process_laser_scan(msg)
+        
+        # Take action based on current state
+        self.take_action()
+
+    def process_laser_scan(self, msg: LaserScan):
+        """Process laser scan and update regions"""
+        ranges = np.array(msg.ranges)
+        ranges[np.isinf(ranges)] = self.MAX_RANGE
+        ranges[ranges == 0.0] = self.MAX_RANGE
+        
+        n = len(ranges)
+
+        def safe_min(slice_array):
+            return np.min(slice_array) if len(slice_array) > 0 else self.MAX_RANGE
+
+        # Inndeling for veggfølging med 360 skanning
+        self.regions = {
+            'front': min(safe_min(ranges[0:int(n*0.05)]), safe_min(ranges[int(n*0.95):])),  
+            'right': safe_min(ranges[int(n*0.80):int(n*0.90)]),  
+            'back_right': safe_min(ranges[int(n*0.75):int(n*0.80)]),  
+        }
+
+    def decide_state(self):
+        """Decide which state to use based on sensor readings"""
+        d_front = self.regions.get('front', self.MAX_RANGE)
+        d_right = self.regions.get('right', self.MAX_RANGE)
+        d_back_right = self.regions.get('back_right', self.MAX_RANGE)
+        
+        # Check for timeout in TURN_LEFT state
+        current_time = self.node.get_clock().now().nanoseconds / 1e9
+        if self.state == self.STATE_TURN_LEFT and self.state_start_time is not None:
+            elapsed = current_time - self.state_start_time
+            if elapsed > self.turn_timeout:
+                self.node.get_logger().warn(f"🧱 TURN_LEFT timeout ({elapsed:.1f}s), forcing FOLLOW_WALL")
+                return self.STATE_FOLLOW_WALL
+        
+        # Only log regions when state changes or every 10th call
+        if not hasattr(self, '_log_counter'):
+            self._log_counter = 0
+        self._log_counter += 1
+        
+        if self._log_counter % 50 == 0:  # Log every 50th time
+            self.node.get_logger().info(
+                f"🧱 WallFollower regions: front={d_front:.2f}, right={d_right:.2f}, back_right={d_back_right:.2f}, current_state={self.state}"
+            )
+        
+        # Vegg foran - må snu unna
+        if d_front < self.FRONT_THRESHOLD:
+            return self.STATE_TURN_LEFT
+        
+        # Veggen har stoppet, utvendig hjørne
+        elif d_right > (self.WALL_DISTANCE + 0.4) and d_back_right > (self.WALL_DISTANCE + 0.4):
+            return self.STATE_TURN_RIGHT
+            
+        # Følg veggen - mer fleksibel overgang fra TURN_LEFT
         else:
-            self.simple_wall_following(msg)
+            # Hvis vi er i TURN_LEFT og front er nå fri, gå til FOLLOW_WALL
+            if self.state == self.STATE_TURN_LEFT and d_front > self.FRONT_THRESHOLD:
+                return self.STATE_FOLLOW_WALL
+            # Ellers følg veggen
+            return self.STATE_FOLLOW_WALL
 
-    def guided_wall_following(self, msg: LaserScan, target):
-        """Wall following med retning mot mål"""
-        dL = self._range_at_deg(msg, +15.0)
-        dR = self._range_at_deg(msg, -15.0)
-        dF = self._range_at_deg(msg, 0.0)
+    def do_turn_left(self):
+        """Action for turning left when obstacle ahead"""
+        twist_msg = Twist()
+        twist_msg.linear.x = self.TURN_LEFT_SPEED_LIN
+        twist_msg.angular.z = self.TURN_LEFT_SPEED_ANG 
+        return twist_msg
 
-        # Kollisjonsunngåelse først
-        if dF < self.THRESHOLD:
-            self.is_turning = True
-            self.turn_time_start = self.node.get_clock().now()
-            self.publish_twist(0.0, self.TURN_SPEED)
-        elif self.is_turning:
-            # Fortsett sving
-            elapsed = (self.node.get_clock().now() - self.turn_time_start).nanoseconds / 1e9
-            if elapsed < 2.0:
-                self.publish_twist(0.0, self.TURN_SPEED)
-            else:
-                self.is_turning = False
-                self.turn_time_start = None
+    def do_turn_right(self):
+        """Action for turning right when wall ends"""
+        twist_msg = Twist()
+        twist_msg.linear.x = self.LINEAR_SPEED * 0.5
+        twist_msg.angular.z = -0.15 
+        return twist_msg
+
+    def do_follow_wall(self):
+        """Action for following wall with distance control"""
+        d_right = self.regions['right']
+        error = d_right - self.WALL_DISTANCE
+        angular_vel = -self.KP_ANGULAR * error
+        
+        twist_msg = Twist()
+        twist_msg.angular.z = max(min(angular_vel, 0.5), -0.5) 
+        twist_msg.linear.x = self.LINEAR_SPEED
+        return twist_msg
+
+    def take_action(self):
+        """Take action based on current state"""
+        new_state = self.decide_state()
+        
+        # Track state changes and timing
+        if new_state != self.state:
+            self.state = new_state
+            self.state_start_time = self.node.get_clock().now().nanoseconds / 1e9
+            self.node.get_logger().info(f"🧱 State change to: {self.state}")
+
+        state_str = {0: "TURN_LEFT", 1: "FOLLOW_WALL", 2: "TURN_RIGHT"}[self.state]
+        
+        # Only log state when it changes
+        if not hasattr(self, '_last_logged_state') or self._last_logged_state != self.state:
+            self.node.get_logger().info(f"🧱 WallFollower State: {state_str}")
+            self._last_logged_state = self.state
+
+        # Get and execute the appropriate action function
+        action_function = self.state_actions.get(self.state)
+        if action_function:
+            twist_msg = action_function()
         else:
-            # Wall following med retning mot mål
-            if dL > self.THRESHOLD and dR > self.THRESHOLD:
-                # Fri vei - naviger mot mål
-                desired_heading = math.atan2(target[1], target[0])
-                angular_z = 0.5 * desired_heading
-                linear_x = self.FORWARD_SPEED
-                self.publish_twist(linear_x, angular_z)
-            else:
-                # Standard wall following
-                self.simple_wall_following(msg)
+            self.node.get_logger().warn(f"🧱 Ukjent tilstand: {self.state}. Stopper.")
+            twist_msg = Twist()
 
-    def simple_wall_following(self, msg: LaserScan):
-        """Enkel wall following logikk"""
-        dL = self._range_at_deg(msg, +15.0)
-        dR = self._range_at_deg(msg, -15.0)
-        dF = self._range_at_deg(msg, 0.0)
+        # Only log cmd_vel when it changes significantly
+        if not hasattr(self, '_last_cmd_vel') or abs(twist_msg.linear.x - self._last_cmd_vel[0]) > 0.1 or abs(twist_msg.angular.z - self._last_cmd_vel[1]) > 0.1:
+            self.node.get_logger().info(
+                f"🧱 Cmd_vel: linear.x={twist_msg.linear.x:.2f}, angular.z={twist_msg.angular.z:.2f}"
+            )
+            self._last_cmd_vel = (twist_msg.linear.x, twist_msg.angular.z)
 
-        # Beregn elapsed time for turning
-        elapsed = 0.0
-        if self.is_turning and self.turn_time_start:
-            elapsed = (self.node.get_clock().now() - self.turn_time_start).nanoseconds / 1e9
-
-        # Enkel wall following logikk
-        linear_x = 0.0
-        angular_z = 0.0
-
-        if self.is_turning:
-            # Fortsett å svinge
-            linear_x = 0.0
-            angular_z = self.TURN_SPEED
-        else:
-            # Enkel kollisjonsunngåelse og wall following
-            if dF < self.THRESHOLD:
-                self.is_turning = True
-                self.turn_time_start = self.node.get_clock().now()
-                linear_x = 0.0
-                angular_z = self.TURN_SPEED
-            elif dL > self.THRESHOLD and dR > self.THRESHOLD:
-                linear_x = self.FORWARD_SPEED
-                angular_z = 0.0
-            elif dL <= self.THRESHOLD and dR > self.THRESHOLD:
-                linear_x = self.FORWARD_SPEED * 0.5
-                angular_z = -0.3
-            elif dR <= self.THRESHOLD and dL > self.THRESHOLD:
-                linear_x = self.FORWARD_SPEED * 0.5
-                angular_z = 0.3
-            else:
-                linear_x = 0.0
-                angular_z = self.TURN_SPEED
-
-        # Håndter turning state
-        if dF < self.THRESHOLD and not self.is_turning:
-            self.is_turning = True
-            self.turn_time_start = self.node.get_clock().now()
-        elif self.is_turning and elapsed >= 2.0:
-            self.is_turning = False
-            self.turn_time_start = None
-
-        self.publish_twist(linear_x, angular_z)
+        self.publish_twist(twist_msg.linear.x, twist_msg.angular.z)
 
     def _range_at_deg(self, scan: LaserScan, deg, default=100.0):
         """Hent avstand ved vinkel (grader) fra siste LIDAR"""

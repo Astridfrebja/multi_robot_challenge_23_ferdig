@@ -31,6 +31,8 @@ class RobotMemory:
         self.other_robot_at_fire = False
         self.i_am_at_fire = False
         self.fire_extinguished = False
+        self.big_fire_logged = False
+        self.waiting_logged = False
         
         # Leder & Supporter roles
         self.my_role = None
@@ -42,6 +44,9 @@ class RobotMemory:
         # Goal navigation state
         self.target_position = None
         self.navigation_active = False
+
+        # ArUco processing bookkeeping (avoid duplicate handling)
+        self._processed_aruco_ids = set()
 
     def set_big_fire_detected_by_me(self, position: tuple):
         """Sett Big Fire oppdaget av denne roboten"""
@@ -61,6 +66,7 @@ class RobotMemory:
     def transition_to_leder_waiting(self):
         """Transition til Leder venting"""
         self.big_fire_state = self.LEDER_WAITING
+        self.waiting_logged = False  # allow waiting log once when entering state
 
     def transition_to_extinguishing(self):
         """Transition til slukking"""
@@ -69,6 +75,15 @@ class RobotMemory:
     def transition_to_normal(self):
         """Transition til normal tilstand"""
         self.big_fire_state = self.NORMAL
+        self.big_fire_detected_by_me = False
+        self.big_fire_detected_by_other = False
+        self.other_robot_at_fire = False
+        self.i_am_at_fire = False
+        self.fire_extinguished = False
+        self.big_fire_logged = False
+        self.waiting_logged = False
+        self.target_position = None
+        self.navigation_active = False
 
     def set_other_robot_at_fire(self, value: bool):
         """Sett om annen robot er ved brannen"""
@@ -106,6 +121,23 @@ class RobotMemory:
         print(f"🔥 should_handle_big_fire: detected_by_me={self.big_fire_detected_by_me}, detected_by_other={self.big_fire_detected_by_other}, state={self.big_fire_state}, result={result}")
         
         return result
+
+    # --- Convenience helpers used by coordinator ---
+    def is_moving_to_fire(self) -> bool:
+        """Sjekk om vi er i en bevegelsesfase mot brannen."""
+        return self.big_fire_state in [self.LEDER_GOING_TO_FIRE, self.SUPPORTER_GOING_TO_FIRE]
+
+    def transition_to_leder_going_to_fire(self):
+        """Sett state når leder skal gå mot brannen."""
+        self.big_fire_state = self.LEDER_GOING_TO_FIRE
+        self.target_position = self.big_fire_position
+        self.navigation_active = True
+
+    def transition_to_supporter_going_to_fire(self):
+        """Sett state når supporter skal gå mot brannen."""
+        self.big_fire_state = self.SUPPORTER_GOING_TO_FIRE
+        self.target_position = self.big_fire_position
+        self.navigation_active = True
 
     def is_leder_waiting(self) -> bool:
         """Sjekk om Leder venter"""
@@ -150,3 +182,16 @@ class RobotMemory:
         self.fire_extinguished = False
         self.my_role = None
         self.big_fire_state = self.NORMAL
+        self.big_fire_logged = False
+        self.waiting_logged = False
+        self.target_position = None
+        self.navigation_active = False
+
+    # --- ArUco processing helpers ---
+    def is_aruco_processed(self, marker_id: int) -> bool:
+        """Returner om gitt ArUco-ID allerede er behandlet."""
+        return marker_id in self._processed_aruco_ids
+
+    def mark_aruco_processed(self, marker_id: int) -> None:
+        """Merk en ArUco-ID som behandlet."""
+        self._processed_aruco_ids.add(marker_id)

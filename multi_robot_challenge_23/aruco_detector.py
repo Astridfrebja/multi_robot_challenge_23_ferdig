@@ -12,7 +12,7 @@ class ArUcoDetector:
     Single Responsibility: Kun ArUco detection og rapportering
     """
     
-    def __init__(self, node_ref: Node, callback=None):
+    def __init__(self, node_ref: Node, callback=None, memory=None): 
         self.node = node_ref
         
         # ArUco tracking
@@ -21,54 +21,25 @@ class ArUcoDetector:
         
         # Callback for ArUco detection
         self.aruco_callback = callback
-        
-        # Setup subscribers
-        self.setup_subscribers()
+        self.memory = memory
         
         self.node.get_logger().info('📊 ArUcoDetector initialisert')
 
-    def setup_subscribers(self):
-        """Sett opp ArUco marker detection subscribers"""
-        # Subscriber for ArUco marker ID (riktig topic basert på dokumentasjon)
-        self.marker_id_sub = self.node.create_subscription(
-            Int64, 'marker_id', self.marker_id_callback, 10
-        )
+    def process_detected_aruco(self, marker_id: int, position: tuple):
+        """Ny inngangsfunksjon for å håndtere deteksjon én gang"""
         
-        # Subscriber for ArUco marker pose i map koordinater (riktig topic basert på dokumentasjon)
-        self.marker_pose_sub = self.node.create_subscription(
-            Pose, 'marker_map_pose', self.marker_pose_callback, 10
-        )
-
-    def marker_id_callback(self, msg: Int64):
-        """Håndterer ArUco marker ID detection"""
-        marker_id = msg.data
-        self.node.get_logger().info(f'📊 ArUco ID {marker_id} oppdaget!')
-        self.current_marker_id = marker_id
-
-    def marker_pose_callback(self, msg: Pose):
-        """Håndterer ArUco marker pose i map koordinater"""
-        if self.current_marker_id is not None:
-            position = (
-                msg.position.x,
-                msg.position.y,
-                msg.position.z
-            )
+        # 1. KUN LOGG FØRSTE GANG
+        if not self.memory.is_aruco_processed(marker_id):
+            self.node.get_logger().info(f'📊 ArUco ID {marker_id} oppdaget på {position} - Utfører callback.')
             
-            self.node.get_logger().info(
-                f'📍 ArUco ID {self.current_marker_id} posisjon: '
-                f'x={position[0]:.2f}, y={position[1]:.2f}, z={position[2]:.2f}'
-            )
+            # 2. MARKER SOM BEHANDLET
+            self.memory.mark_aruco_processed(marker_id)
             
-            # Lagre detektert merke
-            self.detected_markers[self.current_marker_id] = (
-                position[0], position[1], self.node.get_clock().now()
-            )
-            
-            # Rapporter ArUco-merke
-            self.report_aruco_marker(self.current_marker_id, position)
-            
-            # Rydd opp
-            self.current_marker_id = None
+            # 3. KALL VIDERE LOGIKK
+            if self.aruco_callback:
+                self.aruco_callback(marker_id, position)
+            else:
+                self.node.get_logger().warn(f'📊 No aruco_callback set for marker_id={marker_id}')
 
     def report_aruco_marker(self, marker_id: int, position: tuple):
         """Rapporter ArUco-merke"""
