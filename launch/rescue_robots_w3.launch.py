@@ -110,6 +110,15 @@ def generate_launch_description():
         output='screen',
         parameters=[{'use_sim_time': use_sim_time}]
     )
+    
+    # Scoring system node
+    scoring_node = Node(
+        package='scoring',
+        executable='scoring',
+        name='scoring',
+        output='screen',
+        parameters=[{'use_sim_time': use_sim_time}]
+    )
 
     return LaunchDescription([
         sim_time_arg,
@@ -121,4 +130,5 @@ def generate_launch_description():
         rviz_node,
         robot1_node,
         robot2_node,
+        scoring_node,
     ])

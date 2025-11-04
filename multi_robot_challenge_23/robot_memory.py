@@ -29,10 +29,12 @@ class RobotMemory:
         self.big_fire_detected_by_me = False
         self.big_fire_detected_by_other = False
         self.other_robot_at_fire = False
+        self.other_robot_position = None  # Posisjon til den andre roboten
         self.i_am_at_fire = False
         self.fire_extinguished = False
         self.big_fire_logged = False
         self.waiting_logged = False
+        self.bonus_reported = False  # Flagg for om +300pt bonus er rapportert
         
         # Leder & Supporter roles
         self.my_role = None
@@ -78,10 +80,12 @@ class RobotMemory:
         self.big_fire_detected_by_me = False
         self.big_fire_detected_by_other = False
         self.other_robot_at_fire = False
+        self.other_robot_position = None
         self.i_am_at_fire = False
         self.fire_extinguished = False
         self.big_fire_logged = False
         self.waiting_logged = False
+        self.bonus_reported = False
         self.target_position = None
         self.navigation_active = False
 
@@ -117,8 +121,9 @@ class RobotMemory:
                   self.big_fire_detected_by_other or 
                   self.big_fire_state != self.NORMAL)
         
-        # Debug logging - kan ikke bruke node.get_logger() her
-        print(f"🔥 should_handle_big_fire: detected_by_me={self.big_fire_detected_by_me}, detected_by_other={self.big_fire_detected_by_other}, state={self.big_fire_state}, result={result}")
+        # Debug logging fjernet for å redusere spam
+        # Aktiver kun ved debugging:
+        # print(f"🔥 should_handle_big_fire: result={result}")
         
         return result
 
@@ -178,12 +183,14 @@ class RobotMemory:
         self.big_fire_detected_by_me = False
         self.big_fire_detected_by_other = False
         self.other_robot_at_fire = False
+        self.other_robot_position = None
         self.i_am_at_fire = False
         self.fire_extinguished = False
         self.my_role = None
         self.big_fire_state = self.NORMAL
         self.big_fire_logged = False
         self.waiting_logged = False
+        self.bonus_reported = False
         self.target_position = None
         self.navigation_active = False
 
