@@ -35,18 +35,16 @@ class SearchRescueCoordinator:
     AVOID_DISTANCE_RELEASE = 1.40
     AVOID_FRONT_THRESHOLD = 0.70
     AVOID_FRONT_RELEASE = 1.10
-    AVOID_TIMEOUT = 2.0
+    AVOID_TIMEOUT = 8.0
     AVOID_STALE_TIME = 3.0
     AVOID_HEADING_DIFFERENCE = 0.6  # rad (~35°)
     AVOID_BACK_DURATION = 0.8
     AVOID_HOLD_MIN = 1.0
     AVOID_ADVANCE_DURATION = 0.7
 
-    # Ekstra parametre for tosidig ryggemanøver
-    PRIORITY_BACK_DURATION = 0.45
-    PRIORITY_HOLD_DURATION = 0.35
-    PRIORITY_RETURN_DURATION = 0.4
     HEADING_FRONT_THRESHOLD = math.radians(110.0)
+
+    MARKER_CONFIRMATION_RADIUS = 2.0
 
     def __init__(self, node_ref: Node):
         self.node = node_ref
@@ -62,6 +60,9 @@ class SearchRescueCoordinator:
         self.scoring_client = ScoringClient(node_ref)
         self.scoring_timer = self.node.create_timer(0.2, self.scoring_client.process_responses)
         self.marker_catalog = self._build_marker_catalog()
+
+        self._processed_aruco_markers = set()
+        self.pending_marker_reports = {}
 
         # Koble sensorens ArUco callback direkte til koordinatorens handler
         self.sensor_manager.aruco_callback = self.handle_aruco_detection
@@ -99,8 +100,6 @@ class SearchRescueCoordinator:
         self._avoidance_logged = False
         self.avoidance_mode = None
         self.avoidance_cooldown_until = 0.0
-        self.avoidance_phase = None
-        self.avoidance_phase_start = 0.0
         self.handled_big_fires = set()
         self.active_big_fire_key = None
         self.avoidance_back_duration = self.AVOID_BACK_DURATION
@@ -577,6 +576,7 @@ class SearchRescueCoordinator:
         self.robot_memory.update_robot_pose(self.robot_position, self.robot_orientation)
         self.bug2_navigator.update_robot_pose(self.robot_position, self.robot_orientation)
         self.publish_robot_presence()
+        self._check_pending_marker_reports()
 
     def handle_big_fire_state_logic(self):
         """Håndterer KUN tilstandsoverganger og publisering."""
@@ -620,49 +620,165 @@ class SearchRescueCoordinator:
                 coordinator.memory.transition_to_supporter_going_to_fire()
 
     def handle_aruco_detection(self, marker_id: int, position: tuple):
-        """Håndterer ArUco marker detection"""
-        # Only log once per marker to avoid spam
-        if not hasattr(self, '_processed_aruco_markers'):
-            self._processed_aruco_markers = set()
-
+        """Håndter ArUco-detektering med krav om nærhet før rapportering."""
         if marker_id in self._processed_aruco_markers:
-            return  # Already processed this marker
-
-        self._processed_aruco_markers.add(marker_id)
+            return
 
         marker_info = self.marker_catalog.get(marker_id, {
             "label": "ukjent objekt",
-            "points": 0
+            "points": 0,
         })
+        distance = self._distance_to_position(position)
+
         self.node.get_logger().info(
-            f'🎯 ArUco merke ID {marker_id} ({marker_info["label"]}) på posisjon '
-            f'({position[0]:.2f}, {position[1]:.2f}). Poeng = {marker_info["points"]}'
+            f'🎯 ArUco merke ID {marker_id} ({marker_info["label"]}) observert på '
+            f'({position[0]:.2f}, {position[1]:.2f}) – avstand {distance:.2f} m'
         )
 
-        if marker_id == 4:  # Big Fire
-            big_fire_key = self._big_fire_key(position)
-            if self.big_fire_coordinator.should_handle_big_fire():
-                # Allerede i gang med denne hendelsen
-                return
-            if big_fire_key in self.handled_big_fires:
-                self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
-                return
-            self.active_big_fire_key = big_fire_key
-            self.bug2_navigator.stop_robot()
-            self.wall_follower.stop_robot()
-            self.node.get_logger().info(f'🛑 ROBOT STOPPED! ArUco ID {marker_id} oppdaget på {position}')
-            self.node.get_logger().info(f'🔥 BIG FIRE DETECTED! Calling detect_big_fire({position})')
-            self._cancel_aruco_scan('Big Fire funnet')
-            self.big_fire_coordinator.detect_big_fire(position)
-            # Kaller update_state umiddelbart for å sette i gang navigasjonen i neste process_scan
-            self.big_fire_coordinator.update_state(self.robot_position, self.robot_orientation)
-        else:
-            report_result = self.scoring_client.report_marker(marker_id, position)
-            if report_result is False:
-                self.node.get_logger().warn(
-                    f'⚠️ Klarte ikke å rapportere ArUco ID {marker_id} til scoringstjenesten.'
+        if distance > self.MARKER_CONFIRMATION_RADIUS:
+            self._register_pending_marker(marker_id, position, marker_info, distance)
+            return
+
+        self._finalize_marker_detection(marker_id, position, marker_info, distance)
+
+    def _register_pending_marker(self, marker_id: int, position: tuple, marker_info: dict, distance: float):
+        """Lagre markør som må bekreftes når roboten er nærmere."""
+        existing = self.pending_marker_reports.get(marker_id)
+        self.pending_marker_reports[marker_id] = {
+            'position': position,
+            'label': marker_info.get("label", "ukjent objekt"),
+        }
+
+        if existing is None:
+            if marker_id == 4:
+                self.node.get_logger().info(
+                    f'🔥 Big Fire registrert {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
+                    'Fortsetter nærmere før stopp og rapportering.'
                 )
-            # `None` betyr at forespørselen er sendt og venter på svar – ingen ekstra logging nødvendig nå.
+            else:
+                self.node.get_logger().info(
+                    f'🚶 Markør ID {marker_id} er {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
+                    'Venter med poengregistrering til roboten er innenfor 2.0 m.'
+                )
+
+        if marker_id == 4:
+            self._handle_big_fire_detection(
+                position,
+                distance,
+                within_radius=False,
+                first_detection=(existing is None),
+            )
+
+    def _finalize_marker_detection(self, marker_id: int, position: tuple, marker_info: dict, distance: float):
+        """Rapporter markøren når roboten er innenfor ønsket radius."""
+        was_pending = marker_id in self.pending_marker_reports
+        self.pending_marker_reports.pop(marker_id, None)
+
+        if marker_id in self._processed_aruco_markers:
+            return
+
+        self._processed_aruco_markers.add(marker_id)
+
+        self.node.get_logger().info(
+            f'✅ ArUco ID {marker_id} ({marker_info["label"]}) er {distance:.2f} m unna '
+            f'(<={self.MARKER_CONFIRMATION_RADIUS:.1f} m). Rapporterer til scoring-systemet.'
+        )
+
+        report_result = self.scoring_client.report_marker(marker_id, position)
+        if report_result is False:
+            self.node.get_logger().warn(
+                f'⚠️ Klarte ikke å rapportere ArUco ID {marker_id} til scoringstjenesten.'
+            )
+
+        if marker_id == 4:
+            self._handle_big_fire_detection(
+                position,
+                distance,
+                within_radius=True,
+                first_detection=not was_pending,
+            )
+
+    def _distance_to_position(self, position: tuple) -> float:
+        """Beregn avstand fra roboten til gitt posisjon."""
+        if position is None:
+            return float('inf')
+        return math.hypot(position[0] - self.robot_position[0], position[1] - self.robot_position[1])
+
+    def _check_pending_marker_reports(self):
+        """Se om ventende markører nå er innenfor rapporteringsradius."""
+        if not self.pending_marker_reports:
+            return
+
+        for marker_id, data in list(self.pending_marker_reports.items()):
+            position = data.get('position')
+            if position is None:
+                continue
+
+            distance = self._distance_to_position(position)
+            if distance <= self.MARKER_CONFIRMATION_RADIUS:
+                marker_info = self.marker_catalog.get(marker_id, {
+                    "label": "ukjent objekt",
+                    "points": 0,
+                })
+                self._finalize_marker_detection(marker_id, position, marker_info, distance)
+            elif marker_id == 4:
+                self._handle_big_fire_detection(
+                    position,
+                    distance,
+                    within_radius=False,
+                    first_detection=False,
+                )
+
+    def _handle_big_fire_detection(
+        self,
+        position: tuple,
+        distance: float,
+        within_radius: bool,
+        first_detection: bool = False,
+    ):
+        """Koordiner spesiallogikk for Big Fire-markøren."""
+        big_fire_key = self._big_fire_key(position)
+
+        if big_fire_key in self.handled_big_fires:
+            self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
+            return
+
+        self.active_big_fire_key = big_fire_key
+
+        if first_detection:
+            self.node.get_logger().info(
+                f'🔥 BIG FIRE oppdaget {distance:.2f} m unna. Aktiverer koordinator.'
+            )
+
+        self._cancel_aruco_scan('Big Fire funnet')
+
+        if first_detection or not self.big_fire_coordinator.should_handle_big_fire():
+            self.big_fire_coordinator.detect_big_fire(position)
+
+        self.big_fire_coordinator.update_state(self.robot_position, self.robot_orientation)
+
+        if within_radius:
+            if self.robot_memory.my_role == self.robot_memory.LEDER:
+                self.node.get_logger().info(
+                    f'🛑 Leder ved Big Fire (avstand {distance:.2f} m). Stopper roboten og avventer samarbeid.'
+                )
+                self.bug2_navigator.stop_robot()
+                self.wall_follower.stop_robot()
+                if self.robot_memory.big_fire_state != self.robot_memory.LEDER_WAITING:
+                    self.robot_memory.transition_to_leder_waiting()
+                if not self.robot_memory.i_am_at_fire:
+                    self.big_fire_coordinator.publish_robot_at_fire()
+            else:
+                self.node.get_logger().info(
+                    f'🔥 Supporter innenfor {self.MARKER_CONFIRMATION_RADIUS:.1f} m av Big Fire (avstand {distance:.2f} m).'
+                )
+                if not self.robot_memory.i_am_at_fire:
+                    self.big_fire_coordinator.publish_robot_at_fire()
+        else:
+            if first_detection:
+                self.node.get_logger().info(
+                    f'🔥 Fortsetter mot Big Fire til avstand er <= {self.MARKER_CONFIRMATION_RADIUS:.1f} m.'
+                )
 
     # --- Trafikkregler mellom roboter ---
     def publish_robot_presence(self):
@@ -728,11 +844,16 @@ class SearchRescueCoordinator:
         heading_diff = abs(self._normalize_angle(bearing - self.robot_orientation))
 
         if self.avoidance_active:
-            handled = self._handle_avoidance_phase(now, distance, front_distance)
-            if handled:
-                return True
-            if not self.avoidance_active:
+            encounter_running = False
+            if hasattr(self.wall_follower, 'is_encounter_running'):
+                try:
+                    encounter_running = self.wall_follower.is_encounter_running()
+                except Exception:
+                    encounter_running = False
+            if not encounter_running or now >= self.avoidance_release_time:
+                self._reset_avoidance_state(cooldown=0.5)
                 return False
+            return True
 
         if distance > self.AVOID_DISTANCE_TRIGGER or front_distance > self.AVOID_FRONT_THRESHOLD:
             self._avoidance_logged = False
@@ -747,34 +868,24 @@ class SearchRescueCoordinator:
         if self.avoidance_active:
             return True
 
-        # Start ny tosidig møtemanøver
-        self.avoidance_active = True
-        self.avoidance_phase = 'backing'
-        self.avoidance_phase_start = now
-        self.avoidance_release_time = now + self.AVOID_TIMEOUT
-
-        if my_number <= other_number:
-            self.avoidance_mode = 'priority'
-            self.avoidance_back_duration = self.PRIORITY_BACK_DURATION
-            self.avoidance_hold_duration = self.PRIORITY_HOLD_DURATION
-            self.avoidance_return_duration = self.PRIORITY_RETURN_DURATION
-            target = self.other_robot_id or 'ukjent'
+        mode = 'priority' if my_number <= other_number else 'yield'
+        label = self.other_robot_id or 'ukjent'
+        if mode == 'priority':
             self.node.get_logger().info(
-                f'🤝 Møter {target}. Har forkjørsrett, men rygger litt tilbake for å åpne passasje.'
+                f'🤝 Møter {label}. Har forkjørsrett, men rygger litt tilbake for å åpne passasje.'
             )
         else:
-            self.avoidance_mode = 'yield'
-            self.avoidance_back_duration = self.AVOID_BACK_DURATION
-            self.avoidance_hold_duration = self.AVOID_HOLD_MIN
-            self.avoidance_return_duration = self.AVOID_ADVANCE_DURATION
-            other_label = self.other_robot_id or 'ukjent'
             self.node.get_logger().info(
-                f'🤝 Gir forkjørsrett til {other_label}. Rygger og venter før jeg fortsetter.'
+                f'🤝 Gir forkjørsrett til {label}. Rygger og venter før jeg fortsetter.'
             )
 
-        self._avoidance_logged = True
+        self.wall_follower.start_robot_encounter(mode)
         self.bug2_navigator.stop_robot()
-        self.wall_follower.backup_along_wall()
+        self._avoidance_logged = True
+        self.avoidance_active = True
+        encounter_timeout = getattr(self.wall_follower, 'ENCOUNTER_MAX_DURATION', self.AVOID_TIMEOUT)
+        self.avoidance_release_time = now + max(self.AVOID_TIMEOUT, encounter_timeout)
+        self.avoidance_mode = mode
         return True
 
     def get_time_seconds(self) -> float:
@@ -799,56 +910,21 @@ class SearchRescueCoordinator:
             angle += 2 * math.pi
         return angle
 
-    def _handle_avoidance_phase(self, now: float, distance: float, front_distance: float) -> bool:
-        """Utfør trinnvis møtemanøver for begge roboter."""
-        elapsed = now - self.avoidance_phase_start
-
-        if self.avoidance_phase == 'backing':
-            if elapsed < self.avoidance_back_duration:
-                self.wall_follower.backup_along_wall()
-                self.bug2_navigator.stop_robot()
-                return True
-            self.avoidance_phase = 'holding'
-            self.avoidance_phase_start = now
-            elapsed = 0.0
-
-        if self.avoidance_phase == 'holding':
-            self.wall_follower.hold_position_against_wall()
-            self.bug2_navigator.stop_robot()
-            if (
-                elapsed >= self.avoidance_hold_duration
-                and distance > self.AVOID_DISTANCE_RELEASE
-                and self._heading_difference_ok(self.avoidance_mode)
-            ) or front_distance > self.AVOID_FRONT_RELEASE:
-                self.avoidance_phase = 'return'
-                self.avoidance_phase_start = now
-            return True
-
-        if self.avoidance_phase == 'return':
-            if elapsed < self.avoidance_return_duration:
-                self.wall_follower.advance_along_wall()
-                self.bug2_navigator.stop_robot()
-                return True
-            cooldown = 0.6 if self.avoidance_mode == 'priority' else 1.2
-            self._reset_avoidance_state(cooldown=cooldown)
-            self.node.get_logger().info('🤝 Møtemanøver ferdig. Fortsetter veggfølging.')
-            return False
-
-        return False
-
     def _reset_avoidance_state(self, cooldown: float = 0.0):
         """Nullstill tilstand for møte med annen robot."""
         self.avoidance_active = False
         self.avoidance_mode = None
-        self.avoidance_phase = None
         self._avoidance_logged = False
         self.robot_memory.other_robot_position = None
         self.other_robot_id = None
         self.other_robot_number = None
         self.other_robot_yaw = None
-        self.avoidance_phase_start = 0.0
         self.avoidance_release_time = 0.0
         self.avoidance_cooldown_until = self.get_time_seconds() + cooldown
+        try:
+            self.wall_follower.start_robot_encounter('clear')
+        except Exception:
+            pass
 
     def _big_fire_key(self, position: tuple, precision: float = 0.5) -> tuple:
         """Generer en avrundet nøkkel for en Big Fire-posisjon."""

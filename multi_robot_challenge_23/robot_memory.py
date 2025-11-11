@@ -55,9 +55,9 @@ class RobotMemory:
         self.big_fire_detected_by_me = True
         self.big_fire_position = position
         self.my_role = self.LEDER
-        self.big_fire_state = self.LEDER_WAITING
-        self.target_position = None
-        self.navigation_active = False
+        self.big_fire_state = self.LEDER_GOING_TO_FIRE
+        self.target_position = position
+        self.navigation_active = True
         self.i_am_at_fire = False
         self.waiting_logged = False
 

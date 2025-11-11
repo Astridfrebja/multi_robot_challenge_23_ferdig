@@ -37,12 +37,18 @@ def generate_launch_description():
         default_value='true',
         description='Use simulation clock if true',
     )
+    world_file_arg = DeclareLaunchArgument(
+        'world_file',
+        default_value='',
+        description='Absolute path to the active Gazebo world file (for scoring calibration)',
+    )
 
     namespace_cfg = LaunchConfiguration('namespace')
     x_cfg = LaunchConfiguration('x')
     y_cfg = LaunchConfiguration('y')
     yaw_cfg = LaunchConfiguration('yaw')
     use_sim_time_cfg = LaunchConfiguration('use_sim_time')
+    world_file_cfg = LaunchConfiguration('world_file')
 
     spawn_launch = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
@@ -63,7 +69,10 @@ def generate_launch_description():
         name='robot_controller',
         namespace=namespace_cfg,
         output='screen',
-        parameters=[{'use_sim_time': use_sim_time_cfg}],
+        parameters=[{
+            'use_sim_time': use_sim_time_cfg,
+            'world_file': world_file_cfg,
+        }],
     )
 
     return LaunchDescription([
@@ -72,6 +81,7 @@ def generate_launch_description():
         y_arg,
         yaw_arg,
         use_sim_time_arg,
+        world_file_arg,
         spawn_launch,
         controller_node,
     ])

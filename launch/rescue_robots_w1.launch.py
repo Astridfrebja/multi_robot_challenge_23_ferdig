@@ -1,15 +1,15 @@
 import os
+from functools import partial
+
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import IncludeLaunchDescription, OpaqueFunction
+from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.actions import DeclareLaunchArgument
 from launch.substitutions import LaunchConfiguration
-
 from launch_ros.actions import Node
 
 
-def _spawn_robot_entities(context, package_name):
+def _spawn_robot_entities(context, package_name, world_file):
     """Create spawn + controller nodes for the requested number of robots."""
     actions = []
 
@@ -67,7 +67,10 @@ def _spawn_robot_entities(context, package_name):
                 name=f'robot_controller_{namespace}',
                 namespace=namespace,
                 output='screen',
-                parameters=[{'use_sim_time': use_sim_time_bool}],
+                parameters=[{
+                    'use_sim_time': use_sim_time_bool,
+                    'world_file': world_file,
+                }],
             )
         )
 
@@ -174,5 +177,5 @@ def generate_launch_description():
         lifecycle_manager,
         rviz_node,
         scoring_node,
-        OpaqueFunction(function=lambda context: _spawn_robot_entities(context, package_name)),
+        OpaqueFunction(function=partial(_spawn_robot_entities, package_name=package_name, world_file=world_file_path)),
     ])
