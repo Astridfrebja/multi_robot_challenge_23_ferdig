@@ -44,6 +44,8 @@ class SearchRescueCoordinator:
 
     HEADING_FRONT_THRESHOLD = math.radians(110.0)
 
+    FIRE_SAME_SIDE_MAX_ANGLE = math.radians(120.0)
+
     MARKER_CONFIRMATION_RADIUS = 2.0
 
     def __init__(self, node_ref: Node):
@@ -190,24 +192,13 @@ class SearchRescueCoordinator:
         if other_distance > radius:
             return False
 
-        occ_manager = getattr(self.sensor_manager, 'occupancy_grid_manager', None)
-        if occ_manager is None or not occ_manager.is_map_available():
-            return True  # fall back to distance-only når kart ikke er tilgjengelig
-
-        fire_point = Point(x=fire_pos[0], y=fire_pos[1], z=0.0)
-        my_point = Point(x=self.robot_position[0], y=self.robot_position[1], z=0.0)
-        other_point = Point(x=other_pos[0], y=other_pos[1], z=0.0)
-
-        my_los = occ_manager.has_line_of_sight(my_point, fire_point)
-        other_los = occ_manager.has_line_of_sight(other_point, fire_point)
-        robots_los = occ_manager.has_line_of_sight(my_point, other_point)
-
-        if not my_los or not other_los or not robots_los:
+        if not self._robots_same_side_of_fire(fire_pos, self.robot_position, other_pos):
             self.node.get_logger().info(
-                '🔥 Begge roboter er nær brannen, men vegg blokkerer sikten (fire eller mellom roboter). Venter.'
+                '🔥 Begge roboter er nær brannen, men ser ut til å stå på hver sin side. Venter.'
             )
+            return False
 
-        return my_los and other_los and robots_los
+        return True
 
     # ---------------- ArUco sweep/hjelpefunksjoner ----------------
 
@@ -845,11 +836,15 @@ class SearchRescueCoordinator:
 
         if self.avoidance_active:
             encounter_running = False
-            if hasattr(self.wall_follower, 'is_encounter_running'):
-                try:
+            try:
+                if hasattr(self.wall_follower, 'update_robot_encounter'):
+                    encounter_running = self.wall_follower.update_robot_encounter()
+                elif hasattr(self.wall_follower, 'is_encounter_running'):
                     encounter_running = self.wall_follower.is_encounter_running()
-                except Exception:
-                    encounter_running = False
+            except Exception as exc:
+                encounter_running = False
+                self.node.get_logger().warn(f'🤝 Encounter update feilet: {exc}')
+
             if not encounter_running or now >= self.avoidance_release_time:
                 self._reset_avoidance_state(cooldown=0.5)
                 return False
@@ -909,6 +904,29 @@ class SearchRescueCoordinator:
         while angle < -math.pi:
             angle += 2 * math.pi
         return angle
+
+    def _robots_same_side_of_fire(self, fire_pos: tuple, my_pos: tuple, other_pos: tuple) -> bool:
+        """
+        Sjekk om begge robotene står på omtrent samme side av brannen.
+        Bruk vektoren fra brannen til hver robot og sørg for at vinkelen mellom dem er moderat.
+        """
+        vx1 = my_pos[0] - fire_pos[0]
+        vy1 = my_pos[1] - fire_pos[1]
+        vx2 = other_pos[0] - fire_pos[0]
+        vy2 = other_pos[1] - fire_pos[1]
+
+        mag1 = math.hypot(vx1, vy1)
+        mag2 = math.hypot(vx2, vy2)
+
+        if mag1 < 1e-3 or mag2 < 1e-3:
+            return True
+
+        dot = vx1 * vx2 + vy1 * vy2
+        cos_angle = dot / (mag1 * mag2)
+        cos_angle = max(-1.0, min(1.0, cos_angle))
+        angle = math.acos(cos_angle)
+
+        return angle <= self.FIRE_SAME_SIDE_MAX_ANGLE
 
     def _reset_avoidance_state(self, cooldown: float = 0.0):
         """Nullstill tilstand for møte med annen robot."""

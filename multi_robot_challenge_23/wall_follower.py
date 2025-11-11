@@ -28,6 +28,15 @@ class WallFollower:
     TURN_LEFT_SPEED_ANG = 0.8 # Svingehastighet for innvendige hjørner (økt)
     TURN_LEFT_SPEED_LIN = 0.0 # Ingen fremoverfart under sving
     OPENING_THRESHOLD = 0.9
+
+    # Robot-robot encounter tidsparametre (alle roboter bruker samme mønster)
+    ENCOUNTER_BACK_SPEED = -0.25
+    ENCOUNTER_BACK_DURATION = 1.0
+    ENCOUNTER_HOLD_DURATION_PRIORITY = 0.4
+    ENCOUNTER_HOLD_DURATION_YIELD = 1.2
+    ENCOUNTER_ADVANCE_SPEED = 0.20
+    ENCOUNTER_ADVANCE_DURATION = 0.6
+    ENCOUNTER_MAX_DURATION = 5.0
     
     def get_front_distance(self, scan: LaserScan) -> float:
         """Hjelpefunksjon for å hente avstand foran roboten."""
@@ -57,6 +66,13 @@ class WallFollower:
             self.STATE_TURN_RIGHT: self.do_turn_right,
         }
         
+        # Robot encounter state (koordinert av SearchRescueCoordinator)
+        self._encounter_state = None
+        self._encounter_mode = None
+        self._encounter_start_time = 0.0
+        self._encounter_state_start = 0.0
+        self._encounter_logged_state = None
+
         self.node.get_logger().info('🧱 WallFollower initialisert')
 
     def follow_wall(self, msg: LaserScan = None, target_direction=None):
@@ -295,3 +311,121 @@ class WallFollower:
         if self.follow_left:
             ang *= -1.0
         self.publish_twist(lin, ang)
+
+    # --- Robot encounter koordinator ---
+
+    def start_robot_encounter(self, mode: str):
+        """
+        Start en koordinert manøver når to roboter møtes.
+        mode kan være 'priority', 'yield' eller 'clear'.
+        """
+        if mode == 'clear':
+            self._finish_robot_encounter(log=False)
+            return
+
+        now = self._current_time()
+
+        # Hvis vi allerede er i en encounter, oppdater kun modusen ved behov
+        if self._encounter_state is not None:
+            if self._encounter_mode != mode:
+                self.node.get_logger().info(f'🧱 Encounter modus endret fra {self._encounter_mode} til {mode}.')
+                self._encounter_mode = mode
+            return
+
+        self._encounter_mode = mode
+        self._encounter_state = 'back'
+        self._encounter_start_time = now
+        self._encounter_state_start = now
+        self._encounter_logged_state = None
+
+        self.node.get_logger().info(
+            f'🧱 Encounter ({mode}): rygger for å løse kollisjon.'
+        )
+        self._publish_encounter_twist(self.ENCOUNTER_BACK_SPEED, 0.0)
+
+    def update_robot_encounter(self) -> bool:
+        """
+        Oppdater encounter-state. Returnerer True så lenge encounter er aktiv.
+        """
+        if self._encounter_state is None:
+            return False
+
+        now = self._current_time()
+        elapsed_total = now - self._encounter_start_time
+
+        if elapsed_total >= self.ENCOUNTER_MAX_DURATION:
+            self.node.get_logger().warn('🧱 Encounter timeout – frigjør kontroll.')
+            self._finish_robot_encounter()
+            return False
+
+        elapsed_state = now - self._encounter_state_start
+
+        if self._encounter_state == 'back':
+            self._log_encounter_state('Rygger tilbake for klaring')
+            self._publish_encounter_twist(self.ENCOUNTER_BACK_SPEED, 0.0)
+            if elapsed_state >= self.ENCOUNTER_BACK_DURATION:
+                self._transition_encounter_state('hold')
+            return True
+
+        if self._encounter_state == 'hold':
+            hold_duration = (
+                self.ENCOUNTER_HOLD_DURATION_PRIORITY
+                if self._encounter_mode == 'priority'
+                else self.ENCOUNTER_HOLD_DURATION_YIELD
+            )
+            self._log_encounter_state('Holder posisjon etter rygging')
+            self.stop_robot()
+            if elapsed_state >= hold_duration:
+                if self._encounter_mode == 'priority':
+                    self._transition_encounter_state('advance')
+                else:
+                    self._finish_robot_encounter()
+                    return False
+            return True
+
+        if self._encounter_state == 'advance':
+            self._log_encounter_state('Kjører forsiktig fremover etter møte')
+            self._publish_encounter_twist(self.ENCOUNTER_ADVANCE_SPEED, 0.0)
+            if elapsed_state >= self.ENCOUNTER_ADVANCE_DURATION:
+                self._finish_robot_encounter()
+                return False
+            return True
+
+        # Ukjent state – avslutt for sikkerhets skyld
+        self.node.get_logger().warn(f'🧱 Encounter i ukjent tilstand {self._encounter_state}. Stopper.')
+        self._finish_robot_encounter()
+        return False
+
+    def is_encounter_running(self) -> bool:
+        """Returnerer True hvis encounter-state-maskinen er aktiv."""
+        return self._encounter_state is not None
+
+    def _transition_encounter_state(self, new_state: str):
+        self._encounter_state = new_state
+        self._encounter_state_start = self._current_time()
+        self._encounter_logged_state = None
+
+    def _log_encounter_state(self, message: str):
+        if self._encounter_logged_state == self._encounter_state:
+            return
+        self.node.get_logger().info(f'🧱 Encounter: {message}')
+        self._encounter_logged_state = self._encounter_state
+
+    def _publish_encounter_twist(self, linear_x: float, angular_z: float):
+        twist = Twist()
+        twist.linear.x = linear_x
+        twist.angular.z = angular_z
+        self.cmd_vel_publisher.publish(twist)
+
+    def _finish_robot_encounter(self, log: bool = True):
+        if self._encounter_state is not None and log:
+            self.node.get_logger().info('🧱 Encounter ferdig – gjenopptar normal navigasjon.')
+        self._encounter_state = None
+        self._encounter_mode = None
+        self._encounter_start_time = 0.0
+        self._encounter_state_start = 0.0
+        self._encounter_logged_state = None
+        self.stop_robot()
+
+    def _current_time(self) -> float:
+        return self.node.get_clock().now().nanoseconds / 1e9
