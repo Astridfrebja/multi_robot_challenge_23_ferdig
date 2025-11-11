@@ -3,6 +3,8 @@
 
 import math
 import time
+from typing import Optional
+
 from geometry_msgs.msg import Twist
 
 from rclpy.node import Node
@@ -20,6 +22,7 @@ from .aruco_detector import ArUcoDetector
 from .robot_memory import RobotMemory
 from .sensor_manager import SensorManager
 from .dfs_explorer import DfsExplorer
+from .scoring_client import ScoringClient
 
 
 class SearchRescueCoordinator:
@@ -39,6 +42,12 @@ class SearchRescueCoordinator:
     AVOID_HOLD_MIN = 1.0
     AVOID_ADVANCE_DURATION = 0.7
 
+    # Ekstra parametre for tosidig ryggemanøver
+    PRIORITY_BACK_DURATION = 0.45
+    PRIORITY_HOLD_DURATION = 0.35
+    PRIORITY_RETURN_DURATION = 0.4
+    HEADING_FRONT_THRESHOLD = math.radians(110.0)
+
     def __init__(self, node_ref: Node):
         self.node = node_ref
         self.robot_id = self.node.get_namespace().strip('/')
@@ -50,6 +59,9 @@ class SearchRescueCoordinator:
         self.robot_memory = RobotMemory()
         self.big_fire_coordinator = BigFireCoordinator(node_ref, self.robot_memory)
         self.aruco_detector = ArUcoDetector(node_ref, self.handle_aruco_detection)
+        self.scoring_client = ScoringClient(node_ref)
+        self.scoring_timer = self.node.create_timer(0.2, self.scoring_client.process_responses)
+        self.marker_catalog = self._build_marker_catalog()
 
         # Koble sensorens ArUco callback direkte til koordinatorens handler
         self.sensor_manager.aruco_callback = self.handle_aruco_detection
@@ -91,6 +103,9 @@ class SearchRescueCoordinator:
         self.avoidance_phase_start = 0.0
         self.handled_big_fires = set()
         self.active_big_fire_key = None
+        self.avoidance_back_duration = self.AVOID_BACK_DURATION
+        self.avoidance_hold_duration = self.AVOID_HOLD_MIN
+        self.avoidance_return_duration = self.AVOID_ADVANCE_DURATION
 
         # --- ArUco sweep / scanning (for å oppdage vegg-merkene) ---
         self.last_aruco_check_position = (0.0, 0.0)
@@ -103,8 +118,97 @@ class SearchRescueCoordinator:
         self.is_doing_aruco_scan = False
         self.aruco_scan_start = 0.0
         self.pending_aruco_scan = False
+        self._aruco_rotation_log = set()
+        self.aruco_spin_margin = math.radians(5.0)
+
+        # Marker-peek state (åpning)
+        self.last_openings = set()
+        self.marker_peek_state = None
+        self.marker_peek_side = None
+        self.marker_peek_start = 0.0
+        self.marker_peek_rotation_speed = 0.75
+        self.marker_peek_angle = math.radians(40.0)
+        self.marker_peek_hold_duration = 0.6
+        self.marker_peek_timeout = 3.0
 
         self.node.get_logger().info(f'🤖 SearchRescueCoordinator ({self.robot_id}) initialisert')
+
+    def _build_marker_catalog(self) -> dict:
+        """
+        Returnerer en beskrivelse av ArUco-markører med tilhørende poeng.
+        Verdier er basert på DAT160-spesifikasjonen og kan justeres ved behov.
+        """
+        return {
+            0: {"label": "falsk brannindikator", "points": 100},
+            1: {"label": "falsk brannindikator", "points": 50},
+            2: {"label": "baby i fare", "points": 300},
+            3: {"label": "falsk brannindikator", "points": 50},
+            4: {"label": "storbrann", "points": 0},
+        }
+
+    def _resume_normal_exploration(self):
+        """
+        Klargjør roboten for å gjenoppta ordinær utforskning etter en Big Fire-hendelse.
+        """
+        self.is_doing_aruco_scan = False
+        self.pending_aruco_scan = False
+        self.aruco_scan_start = 0.0
+        self.last_aruco_check_position = self.robot_position
+        self.last_aruco_check_time = time.time()
+
+        self.dfs_explorer.reset()
+        self.bug2_navigator.clear_goal()
+
+        if hasattr(self.wall_follower, "state"):
+            try:
+                self.wall_follower.state = self.wall_follower.STATE_FOLLOW_WALL
+                self.wall_follower.state_start_time = None
+            except Exception:
+                pass
+
+        self.node.get_logger().info('🔁 Big Fire håndtert. DFS og veggfølging gjenopptas.')
+
+    def _both_robots_within_fire_radius(self, radius: float = 2.0) -> bool:
+        """True bare når begge roboter er nær nok OG på samme side (fri sikt til brannen)."""
+        fire_pos = self.robot_memory.big_fire_position
+        if fire_pos is None:
+            return False
+
+        if not (self.robot_memory.i_am_at_fire and self.robot_memory.other_robot_at_fire):
+            return False
+
+        my_distance = math.hypot(self.robot_position[0] - fire_pos[0],
+                                 self.robot_position[1] - fire_pos[1])
+        if my_distance > radius:
+            return False
+
+        other_pos = self.robot_memory.other_robot_position
+        if other_pos is None:
+            return False
+
+        other_distance = math.hypot(other_pos[0] - fire_pos[0],
+                                    other_pos[1] - fire_pos[1])
+        if other_distance > radius:
+            return False
+
+        occ_manager = getattr(self.sensor_manager, 'occupancy_grid_manager', None)
+        if occ_manager is None or not occ_manager.is_map_available():
+            return True  # fall back to distance-only når kart ikke er tilgjengelig
+
+        fire_point = Point(x=fire_pos[0], y=fire_pos[1], z=0.0)
+        my_point = Point(x=self.robot_position[0], y=self.robot_position[1], z=0.0)
+        other_point = Point(x=other_pos[0], y=other_pos[1], z=0.0)
+
+        my_los = occ_manager.has_line_of_sight(my_point, fire_point)
+        other_los = occ_manager.has_line_of_sight(other_point, fire_point)
+        robots_los = occ_manager.has_line_of_sight(my_point, other_point)
+
+        if not my_los or not other_los or not robots_los:
+            self.node.get_logger().info(
+                '🔥 Begge roboter er nær brannen, men vegg blokkerer sikten (fire eller mellom roboter). Venter.'
+            )
+
+        return my_los and other_los and robots_los
 
     # ---------------- ArUco sweep/hjelpefunksjoner ----------------
 
@@ -144,6 +248,13 @@ class SearchRescueCoordinator:
         self.is_doing_aruco_scan = True
         self.aruco_scan_start = time.time()
         self.pending_aruco_scan = False
+        self._aruco_rotation_log = set()
+        self.aruco_spin_speed = self.aruco_scan_angular_speed
+        self.aruco_spin_direction = 1.0
+        self.aruco_spin_accumulated = 0.0
+        self.aruco_last_yaw = self.robot_orientation
+        self._aruco_spin_log_state = None
+
         try:
             self.bug2_navigator.stop_robot()
         except Exception:
@@ -152,33 +263,34 @@ class SearchRescueCoordinator:
             self.wall_follower.stop_robot()
         except Exception:
             pass
+        self._stop_all_motion()
 
     def perform_aruco_rotation(self):
-        """Publiser rotasjonskommando mens vi skanner 90° høyre og 90° venstre."""
-        elapsed = time.time() - self.aruco_scan_start
+        """Publiser en jevn 360° rotasjon for å dekke alle retninger."""
+        current_yaw = self.robot_orientation
+        if self.aruco_last_yaw is not None:
+            delta_yaw = self._normalize_angle(current_yaw - self.aruco_last_yaw)
+            self.aruco_spin_accumulated += abs(delta_yaw)
+        self.aruco_last_yaw = current_yaw
+
         t = Twist()
         t.linear.x = 0.0
-        rotation_duration = self.aruco_half_turn_duration
+        t.angular.z = self.aruco_spin_speed * self.aruco_spin_direction
 
-        # Roter først mot høyre, så mot venstre, deretter stopp
-        if elapsed < rotation_duration:
-            # 0–90°: høyre rotasjon
-            t.angular.z = -self.aruco_scan_angular_speed
-        elif elapsed < 2 * rotation_duration:
-            # 90–180°: venstre rotasjon
-            t.angular.z = self.aruco_scan_angular_speed
-        else:
-            # Ferdig med begge sider
+        if self.aruco_spin_accumulated >= (2 * math.pi) - self.aruco_spin_margin:
+            self._stop_all_motion()
             self.finish_aruco_scan()
             return
+        else:
+            progress = min(self.aruco_spin_accumulated / (2 * math.pi), 0.999)
+            stage = int(progress * 4)  # kvart-rundt-indikator
+            if self._aruco_spin_log_state != stage:
+                self.node.get_logger().info('👀 ArUco-sveip: roterer videre for dekning')
+                self._aruco_spin_log_state = stage
 
-    # Publiser rotasjonskommando
-        try:
-            self.bug2_navigator.cmd_vel_pub.publish(t)
-        except Exception:
-            if not hasattr(self, '_tmp_cmd_pub'):
-                self._tmp_cmd_pub = self.node.create_publisher(Twist, f'/{self.robot_id}/cmd_vel', 1)
-            self._tmp_cmd_pub.publish(t)
+        if not hasattr(self, '_aruco_cmd_pub'):
+            self._aruco_cmd_pub = self.node.create_publisher(Twist, 'cmd_vel', 1)
+        self._aruco_cmd_pub.publish(t)
 
     def finish_aruco_scan(self):
         """Avslutt sveip og oppdater tid/posisjon."""
@@ -186,11 +298,145 @@ class SearchRescueCoordinator:
         self.last_aruco_check_position = self.robot_position
         self.last_aruco_check_time = time.time()
         self.pending_aruco_scan = False
+        self._stop_all_motion()
+        self.aruco_spin_accumulated = 0.0
+        self.aruco_last_yaw = None
+        self._aruco_spin_log_state = None
+        self.node.get_logger().info('👁️ Ferdig ArUco-sveip — fortsetter normal navigasjon')
+
+    def _cancel_aruco_scan(self, reason: str = None):
+        """Avbryt pågående ArUco-sveip og nullstill state."""
+        if not self.is_doing_aruco_scan:
+            return
+        self.is_doing_aruco_scan = False
+        self.pending_aruco_scan = False
+        self.aruco_spin_accumulated = 0.0
+        self.aruco_last_yaw = None
+        self._aruco_spin_log_state = None
+        self._stop_all_motion()
+        if reason:
+            self.node.get_logger().info(f'👁️ ArUco-sveip avbrutt: {reason}')
+
+    def _stop_all_motion(self):
+        """Publiser null-hastighet på alle kontrollere."""
         try:
             self.bug2_navigator.stop_robot()
         except Exception:
             pass
-        self.node.get_logger().info('👁️ Ferdig ArUco-sveip — fortsetter normal navigasjon')
+        try:
+            self.wall_follower.stop_robot()
+        except Exception:
+            pass
+        try:
+            self.goal_navigator.stop_robot()
+        except Exception:
+            pass
+        if not hasattr(self, '_aruco_cmd_pub'):
+            self._aruco_cmd_pub = self.node.create_publisher(Twist, 'cmd_vel', 1)
+        self._aruco_cmd_pub.publish(Twist())
+
+    def _detect_new_side_opening(self, openings) -> Optional[str]:
+        """Returner første nye åpning mot venstre/høyre siden for peek."""
+        current = set(openings or [])
+        new_side = None
+        for side in ('LEFT', 'RIGHT'):
+            if side in current and side not in self.last_openings:
+                new_side = side
+                break
+        self.last_openings = current
+        return new_side
+
+    def _can_start_marker_peek(self, side: Optional[str]) -> bool:
+        if side is None:
+            return False
+        if self.marker_peek_state is not None:
+            return False
+        if self.is_doing_aruco_scan or self.pending_aruco_scan:
+            return False
+        if self.big_fire_coordinator.should_handle_big_fire():
+            return False
+        if self.dfs_explorer.has_active_goal() or self.dfs_explorer.has_pending_goals():
+            return False
+        if self.avoidance_active:
+            return False
+        return True
+
+    def _start_marker_peek(self, side: str):
+        """Initier kort markør-sjekk inn i ny sideåpning."""
+        self.marker_peek_state = 'into'
+        self.marker_peek_side = side
+        self.marker_peek_start = time.time()
+        direction = 'venstre' if side == 'LEFT' else 'høyre'
+        self.node.get_logger().info(f'👀 Marker-peek: inspiserer åpning mot {direction}')
+        self._stop_all_motion()
+        angular = self.marker_peek_rotation_speed if side == 'LEFT' else -self.marker_peek_rotation_speed
+        self._publish_marker_peek_twist(angular)
+
+    def _update_marker_peek(self) -> bool:
+        """Oppdater aktiv marker-peek. Returnerer True når prosesseringen skal avbrytes."""
+        if self.marker_peek_state is None:
+            return False
+
+        now = time.time()
+        elapsed = now - self.marker_peek_start
+        rotate_duration = self.marker_peek_angle / max(self.marker_peek_rotation_speed, 1e-3)
+
+        if elapsed > self.marker_peek_timeout:
+            self.node.get_logger().warn('👀 Marker-peek: avbrutt (timeout).')
+            self._finish_marker_peek()
+            return True
+
+        if self.marker_peek_state == 'into':
+            if elapsed >= rotate_duration:
+                self.marker_peek_state = 'hold'
+                self.marker_peek_start = now
+                self._stop_all_motion()
+                self.node.get_logger().info('👀 Marker-peek: holder posisjon for markør-søk')
+            else:
+                angular = self.marker_peek_rotation_speed if self.marker_peek_side == 'LEFT' else -self.marker_peek_rotation_speed
+                self._publish_marker_peek_twist(angular)
+            return True
+
+        if self.marker_peek_state == 'hold':
+            if elapsed >= self.marker_peek_hold_duration:
+                self.marker_peek_state = 'return'
+                self.marker_peek_start = now
+            else:
+                self._stop_all_motion()
+            return True
+
+        if self.marker_peek_state == 'return':
+            if elapsed >= rotate_duration:
+                self._finish_marker_peek()
+            else:
+                angular = -self.marker_peek_rotation_speed if self.marker_peek_side == 'LEFT' else self.marker_peek_rotation_speed
+                self._publish_marker_peek_twist(angular)
+            return True
+
+        return False
+
+    def _publish_marker_peek_twist(self, angular_velocity: float):
+        if not hasattr(self, '_aruco_cmd_pub'):
+            self._aruco_cmd_pub = self.node.create_publisher(Twist, 'cmd_vel', 1)
+        twist = Twist()
+        twist.linear.x = 0.0
+        twist.angular.z = angular_velocity
+        self._aruco_cmd_pub.publish(twist)
+
+    def _finish_marker_peek(self):
+        direction = None
+        if self.marker_peek_side == 'LEFT':
+            direction = 'venstre'
+        elif self.marker_peek_side == 'RIGHT':
+            direction = 'høyre'
+        self._stop_all_motion()
+        if direction:
+            self.node.get_logger().info(f'👀 Marker-peek fullført ({direction}). Fortsetter veggfølging.')
+        else:
+            self.node.get_logger().info('👀 Marker-peek fullført. Fortsetter veggfølging.')
+        self.marker_peek_state = None
+        self.marker_peek_side = None
+        self.marker_peek_start = 0.0
 
     # -------------------------------------------------------------
 
@@ -202,6 +448,8 @@ class SearchRescueCoordinator:
 
         if big_fire_active:
             # Pause DFS mens storbrann håndteres
+            if self.is_doing_aruco_scan:
+                self._cancel_aruco_scan('Big Fire prioritet')
             self.dfs_explorer.clear_current_goal()
 
             # Hent målet for Big Fire navigasjon
@@ -259,6 +507,15 @@ class SearchRescueCoordinator:
             self.wall_follower.process_laser_scan(msg)
 
             openings = self.wall_follower.get_openings()
+            new_side_opening = self._detect_new_side_opening(openings)
+
+            if self.marker_peek_state:
+                if self._update_marker_peek():
+                    return
+            elif self._can_start_marker_peek(new_side_opening):
+                self._start_marker_peek(new_side_opening)
+                return
+
             self.dfs_explorer.register_openings(openings)
             if self.dfs_explorer.has_pending_goals():
                 self.node.get_logger().debug(
@@ -271,10 +528,7 @@ class SearchRescueCoordinator:
 
             # --- ArUco-sveip: hvis kriterier møtes, start / utfør / avslutt sveip ---
             if self.is_doing_aruco_scan:
-                if time.time() - self.aruco_scan_start >= self.aruco_scan_duration:
-                    self.finish_aruco_scan()
-                else:
-                    self.perform_aruco_rotation()
+                self.perform_aruco_rotation()
                 return
 
             if self.should_perform_aruco_scan():
@@ -341,16 +595,21 @@ class SearchRescueCoordinator:
 
         elif current_state == coordinator.memory.EXTINGUISHING:
             self.node.get_logger().info('🔥 SLUKKING PÅGÅR!')
-            if not coordinator.memory.fire_extinguished:
-                if coordinator.memory.big_fire_position is not None:
-                    key = self._big_fire_key(coordinator.memory.big_fire_position)
-                    self.handled_big_fires.add(key)
-                    self.active_big_fire_key = None
-                coordinator.publish_fire_extinguished()
-                self.node.get_logger().info('🔥 Brannen slukket! Roboter returnerer til normal utforskning.')
-                coordinator.memory.transition_to_normal()
-                self.dfs_explorer.reset()
-                self.bug2_navigator.clear_goal()
+            if coordinator.memory.fire_extinguished:
+                if coordinator.memory.big_fire_state != coordinator.memory.NORMAL:
+                    coordinator.memory.transition_to_normal()
+                self._resume_normal_exploration()
+            else:
+                if (
+                    self.robot_memory.my_role == self.robot_memory.LEDER
+                    and self._both_robots_within_fire_radius()
+                ):
+                    if coordinator.memory.big_fire_position is not None:
+                        key = self._big_fire_key(coordinator.memory.big_fire_position)
+                        self.handled_big_fires.add(key)
+                        self.active_big_fire_key = None
+                    coordinator.publish_fire_extinguished()
+                    self._resume_normal_exploration()
 
         elif current_state == coordinator.memory.NORMAL:
             if coordinator.memory.big_fire_detected_by_me:
@@ -366,11 +625,19 @@ class SearchRescueCoordinator:
         if not hasattr(self, '_processed_aruco_markers'):
             self._processed_aruco_markers = set()
 
-        marker_key = f"{marker_id}_{position[0]:.1f}_{position[1]:.1f}"
-        if marker_key in self._processed_aruco_markers:
-            return  # Already processed this marker at this position
+        if marker_id in self._processed_aruco_markers:
+            return  # Already processed this marker
 
-        self._processed_aruco_markers.add(marker_key)
+        self._processed_aruco_markers.add(marker_id)
+
+        marker_info = self.marker_catalog.get(marker_id, {
+            "label": "ukjent objekt",
+            "points": 0
+        })
+        self.node.get_logger().info(
+            f'🎯 ArUco merke ID {marker_id} ({marker_info["label"]}) på posisjon '
+            f'({position[0]:.2f}, {position[1]:.2f}). Poeng = {marker_info["points"]}'
+        )
 
         if marker_id == 4:  # Big Fire
             big_fire_key = self._big_fire_key(position)
@@ -385,11 +652,17 @@ class SearchRescueCoordinator:
             self.wall_follower.stop_robot()
             self.node.get_logger().info(f'🛑 ROBOT STOPPED! ArUco ID {marker_id} oppdaget på {position}')
             self.node.get_logger().info(f'🔥 BIG FIRE DETECTED! Calling detect_big_fire({position})')
+            self._cancel_aruco_scan('Big Fire funnet')
             self.big_fire_coordinator.detect_big_fire(position)
             # Kaller update_state umiddelbart for å sette i gang navigasjonen i neste process_scan
             self.big_fire_coordinator.update_state(self.robot_position, self.robot_orientation)
         else:
-            self.node.get_logger().info(f'📊 ArUco ID {marker_id} på {position} - registrert for scoring, fortsetter.')
+            report_result = self.scoring_client.report_marker(marker_id, position)
+            if report_result is False:
+                self.node.get_logger().warn(
+                    f'⚠️ Klarte ikke å rapportere ArUco ID {marker_id} til scoringstjenesten.'
+                )
+            # `None` betyr at forespørselen er sendt og venter på svar – ingen ekstra logging nødvendig nå.
 
     # --- Trafikkregler mellom roboter ---
     def publish_robot_presence(self):
@@ -451,53 +724,55 @@ class SearchRescueCoordinator:
 
         other_x, other_y = self.robot_memory.other_robot_position
         distance = math.hypot(other_x - self.robot_position[0], other_y - self.robot_position[1])
+        bearing = math.atan2(other_y - self.robot_position[1], other_x - self.robot_position[0])
+        heading_diff = abs(self._normalize_angle(bearing - self.robot_orientation))
 
         if self.avoidance_active:
-            if self.avoidance_mode == 'yield':
-                if self._handle_yield_phase(now, distance, front_distance):
-                    return True
-                if not self.avoidance_active:
-                    return False
-
-            if (
-                distance > self.AVOID_DISTANCE_RELEASE
-                and self._heading_difference_ok(self.avoidance_mode)
-            ) or (
-                distance > (self.AVOID_DISTANCE_RELEASE * 1.6)
-            ) or (
-                front_distance > self.AVOID_FRONT_RELEASE
-            ) or (
-                now >= self.avoidance_release_time
-            ):
-                self._reset_avoidance_state(cooldown=1.0)
-                self.node.get_logger().info('🤝 Konflikt løst, fortsetter veggfølging.')
-            else:
-                self.bug2_navigator.stop_robot()
-                self.wall_follower.hold_position_against_wall()
+            handled = self._handle_avoidance_phase(now, distance, front_distance)
+            if handled:
                 return True
+            if not self.avoidance_active:
+                return False
 
         if distance > self.AVOID_DISTANCE_TRIGGER or front_distance > self.AVOID_FRONT_THRESHOLD:
             self._avoidance_logged = False
             return False
 
+        if heading_diff > self.HEADING_FRONT_THRESHOLD:
+            return False
+
         my_number = self.robot_number if self.robot_number is not None else 0
         other_number = self.other_robot_number if self.other_robot_number is not None else 999
 
-        if my_number <= other_number:
-            if not self._avoidance_logged:
-                target = self.other_robot_id or 'ukjent'
-                self.node.get_logger().info(f'🤝 Møter {target}, beholder forkjørsrett.')
-                self._avoidance_logged = True
-            self.avoidance_mode = 'priority'
-            return False
+        if self.avoidance_active:
+            return True
 
+        # Start ny tosidig møtemanøver
         self.avoidance_active = True
-        self.avoidance_release_time = now + self.AVOID_TIMEOUT
-        self.avoidance_mode = 'yield'
         self.avoidance_phase = 'backing'
         self.avoidance_phase_start = now
-        other_label = self.other_robot_id or 'ukjent'
-        self.node.get_logger().info(f'🤝 Gir forkjørsrett til {other_label}. Kjører til side.')
+        self.avoidance_release_time = now + self.AVOID_TIMEOUT
+
+        if my_number <= other_number:
+            self.avoidance_mode = 'priority'
+            self.avoidance_back_duration = self.PRIORITY_BACK_DURATION
+            self.avoidance_hold_duration = self.PRIORITY_HOLD_DURATION
+            self.avoidance_return_duration = self.PRIORITY_RETURN_DURATION
+            target = self.other_robot_id or 'ukjent'
+            self.node.get_logger().info(
+                f'🤝 Møter {target}. Har forkjørsrett, men rygger litt tilbake for å åpne passasje.'
+            )
+        else:
+            self.avoidance_mode = 'yield'
+            self.avoidance_back_duration = self.AVOID_BACK_DURATION
+            self.avoidance_hold_duration = self.AVOID_HOLD_MIN
+            self.avoidance_return_duration = self.AVOID_ADVANCE_DURATION
+            other_label = self.other_robot_id or 'ukjent'
+            self.node.get_logger().info(
+                f'🤝 Gir forkjørsrett til {other_label}. Rygger og venter før jeg fortsetter.'
+            )
+
+        self._avoidance_logged = True
         self.bug2_navigator.stop_robot()
         self.wall_follower.backup_along_wall()
         return True
@@ -524,12 +799,12 @@ class SearchRescueCoordinator:
             angle += 2 * math.pi
         return angle
 
-    def _handle_yield_phase(self, now: float, distance: float, front_distance: float) -> bool:
-        """Utfør trinnvis vike-manøver for roboten som må stoppe."""
+    def _handle_avoidance_phase(self, now: float, distance: float, front_distance: float) -> bool:
+        """Utfør trinnvis møtemanøver for begge roboter."""
         elapsed = now - self.avoidance_phase_start
 
         if self.avoidance_phase == 'backing':
-            if elapsed < self.AVOID_BACK_DURATION:
+            if elapsed < self.avoidance_back_duration:
                 self.wall_follower.backup_along_wall()
                 self.bug2_navigator.stop_robot()
                 return True
@@ -541,21 +816,22 @@ class SearchRescueCoordinator:
             self.wall_follower.hold_position_against_wall()
             self.bug2_navigator.stop_robot()
             if (
-                elapsed >= self.AVOID_HOLD_MIN
+                elapsed >= self.avoidance_hold_duration
                 and distance > self.AVOID_DISTANCE_RELEASE
-                and self._heading_difference_ok('yield')
-            ):
-                self.avoidance_phase = 'returning'
+                and self._heading_difference_ok(self.avoidance_mode)
+            ) or front_distance > self.AVOID_FRONT_RELEASE:
+                self.avoidance_phase = 'return'
                 self.avoidance_phase_start = now
             return True
 
-        if self.avoidance_phase == 'returning':
-            if elapsed < self.AVOID_ADVANCE_DURATION:
+        if self.avoidance_phase == 'return':
+            if elapsed < self.avoidance_return_duration:
                 self.wall_follower.advance_along_wall()
                 self.bug2_navigator.stop_robot()
                 return True
-            self._reset_avoidance_state(cooldown=1.0)
-            self.node.get_logger().info('🤝 Vike-manøver ferdig. Fortsetter veggfølging.')
+            cooldown = 0.6 if self.avoidance_mode == 'priority' else 1.2
+            self._reset_avoidance_state(cooldown=cooldown)
+            self.node.get_logger().info('🤝 Møtemanøver ferdig. Fortsetter veggfølging.')
             return False
 
         return False

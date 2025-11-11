@@ -31,6 +31,7 @@ setup(
             'robot_handler = multi_robot_challenge_23.robot_handler:main',
             'leader = multi_robot_challenge_23.leader:main',
             'robot_node = multi_robot_challenge_23.robot_node:main',
+            'spawn_robot = multi_robot_challenge_23.spawn_robot_cli:main',
         ],
     },
 )

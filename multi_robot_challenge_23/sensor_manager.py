@@ -51,12 +51,15 @@ class SensorManager:
         
 
         # ArUco detection data
+
         self.current_marker_id = None
+
         self.detected_markers = {}
+        self._logged_markers = set()
         # Optional callback to notify higher-level coordinator when a full marker (id+pose) is available
         self.aruco_callback = None
+        self.aruco_detection_radius = 2.0  # meter
 
-        
 
         # Occupancy grid manager
 
@@ -178,13 +181,8 @@ class SensorManager:
 
         self.current_marker_id = marker_id
 
-        # Only log new markers, not repeated detections
-        if not hasattr(self, '_logged_markers'):
-            self._logged_markers = set()
-        
         if marker_id not in self._logged_markers:
-            self.node.get_logger().info(f'📡 ArUco ID {marker_id} oppdaget!')
-            self._logged_markers.add(marker_id)
+            self.node.get_logger().debug(f'📡 ArUco ID {marker_id} registrert (venter på nærmere posisjon)')
 
 
     def marker_pose_callback(self, msg: Pose):
@@ -203,16 +201,37 @@ class SensorManager:
 
             )
 
-            
 
-            # Only log position for new markers
-            if self.current_marker_id not in self._logged_markers:
-                self.node.get_logger().info(
-                    f'📡 ArUco ID {self.current_marker_id} posisjon: '
-                    f'x={position[0]:.2f}, y={position[1]:.2f}, z={position[2]:.2f}'
+            distance = math.hypot(
+
+                position[0] - self.robot_position[0],
+
+                position[1] - self.robot_position[1]
+
+            )
+
+            if distance > self.aruco_detection_radius:
+
+                self.node.get_logger().debug(
+
+                    f'📡 ArUco ID {self.current_marker_id} observert på {distance:.2f} m (grense {self.aruco_detection_radius:.2f} m)'
+
                 )
 
-            
+            else:
+
+                if self.current_marker_id not in self._logged_markers:
+
+                    self.node.get_logger().info(
+
+                        f'📡 ArUco ID {self.current_marker_id} innenfor {self.aruco_detection_radius:.1f} m: '
+
+                        f'x={position[0]:.2f}, y={position[1]:.2f}, z={position[2]:.2f}'
+
+                    )
+
+                    self._logged_markers.add(self.current_marker_id)
+
 
             # Lagre detektert merke
 
@@ -222,17 +241,24 @@ class SensorManager:
 
             )
 
-            
 
             # Varsle koordinering hvis callback er satt (stoppe uansett marker)
+
             if self.aruco_callback is not None:
+
                 try:
+
                     marker_id = int(self.current_marker_id)
+
                     self.aruco_callback(marker_id, (position[0], position[1]))
+
                 except Exception as e:
+
                     self.node.get_logger().warn(f'📡 ArUco callback feilet: {e}')
 
+
             # Rydd opp
+
             self.current_marker_id = None
 
 
