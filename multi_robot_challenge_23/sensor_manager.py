@@ -1,4 +1,4 @@
- #!/usr/bin/env python3
+#!/usr/bin/env python3
 
 # -*- coding: utf-8 -*-
 
@@ -242,24 +242,13 @@ class SensorManager:
             )
 
 
-            # Varsle koordinering hvis callback er satt (stoppe uansett marker)
-
+            # Varsle koordinering hvis callback er satt (oppdaterer posisjon fortløpende)
             if self.aruco_callback is not None:
-
                 try:
-
                     marker_id = int(self.current_marker_id)
-
                     self.aruco_callback(marker_id, (position[0], position[1]))
-
                 except Exception as e:
-
                     self.node.get_logger().warn(f'📡 ArUco callback feilet: {e}')
-
-
-            # Rydd opp
-
-            self.current_marker_id = None
 
 
     # --- SENSOR DATA ACCESS METHODS ---

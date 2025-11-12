@@ -108,17 +108,23 @@ class BigFireCoordinator:
             self.memory.big_fire_logged = True # Sett flagget etter logging
 
     def robot_at_fire_callback(self, msg: String):
-        """Håndterer meldinger om at annen robot er ved brannen. Logger KUN ved tilstandsskifte."""
-        if "AT_FIRE" not in msg.data:
+        """Håndterer meldinger om at annen robot er ved/forlater brannen. Logger kun ved tilstandsskifte."""
+        parts = msg.data.split(":")
+        if len(parts) != 2:
             return
 
-        robot_id = msg.data.split(":")[0]
+        robot_id, status = parts
         if robot_id == self.robot_id:
             return
 
-        if not self.memory.other_robot_at_fire: # Logg kun ved tilstandsskifte
-            self.memory.set_other_robot_at_fire(True)
-            self.node.get_logger().info(f'🔥 Annen robot ({robot_id}) er ved brannen!')
+        if status == "AT_FIRE":
+            if not self.memory.other_robot_at_fire:
+                self.memory.set_other_robot_at_fire(True)
+                self.node.get_logger().info(f'🔥 Annen robot ({robot_id}) er ved brannen!')
+        elif status == "LEFT_FIRE":
+            if self.memory.other_robot_at_fire:
+                self.memory.set_other_robot_at_fire(False)
+                self.node.get_logger().info(f'🔥 Annen robot ({robot_id}) forlot brannen.')
 
     def fire_extinguished_callback(self, msg: String):
         """Håndterer meldinger om at brannen er slukket. Logger KUN ved tilstandsskifte."""
@@ -178,6 +184,14 @@ class BigFireCoordinator:
         if not self.memory.i_am_at_fire: # Logg kun ved tilstandsskifte
             self.memory.set_i_am_at_fire(True)
             self.node.get_logger().info('🔥 LEDER: Publiserer at jeg er ved brannen!')
+
+    def publish_robot_left_fire(self):
+        """Publiser at vi ikke lenger er ved brannen."""
+        if self.memory.i_am_at_fire:
+            self.memory.set_i_am_at_fire(False)
+        msg = String()
+        msg.data = f"{self.robot_id}:LEFT_FIRE"
+        self.fire_position_pub.publish(msg)
 
     def publish_fire_extinguished(self):
         """Publiserer at brannen er slukket. Logges alltid ved utløsning."""
