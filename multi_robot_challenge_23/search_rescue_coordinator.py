@@ -45,6 +45,7 @@ class SearchRescueCoordinator:
     HEADING_FRONT_THRESHOLD = math.radians(110.0)
 
     FIRE_SAME_SIDE_MAX_ANGLE = math.radians(120.0)
+    HANDLED_FIRE_IGNORE_RADIUS = 1.5
 
     MARKER_CONFIRMATION_RADIUS = 2.0
 
@@ -103,7 +104,11 @@ class SearchRescueCoordinator:
         self.avoidance_mode = None
         self.avoidance_cooldown_until = 0.0
         self.handled_big_fires = set()
+        self.handled_big_fire_positions = []
         self.active_big_fire_key = None
+        self.active_marker_id = None
+        self.active_marker_goal = None
+        self.marker_navigation_start_time = 0.0
         self.avoidance_back_duration = self.AVOID_BACK_DURATION
         self.avoidance_hold_duration = self.AVOID_HOLD_MIN
         self.avoidance_return_duration = self.AVOID_ADVANCE_DURATION
@@ -490,6 +495,10 @@ class SearchRescueCoordinator:
         else:
             # Normal utforskning / veggfølging / DFS
 
+            if self.active_marker_id is not None:
+                if self._handle_active_marker_navigation(msg):
+                    return
+
             # Oppdater pose til DFS-modulen
             self.dfs_explorer.update_pose(self.robot_position, self.robot_orientation)
 
@@ -589,16 +598,14 @@ class SearchRescueCoordinator:
             if coordinator.memory.fire_extinguished:
                 if coordinator.memory.big_fire_state != coordinator.memory.NORMAL:
                     coordinator.memory.transition_to_normal()
+                self._mark_fire_handled(coordinator.memory.big_fire_position)
                 self._resume_normal_exploration()
             else:
                 if (
                     self.robot_memory.my_role == self.robot_memory.LEDER
                     and self._both_robots_within_fire_radius()
                 ):
-                    if coordinator.memory.big_fire_position is not None:
-                        key = self._big_fire_key(coordinator.memory.big_fire_position)
-                        self.handled_big_fires.add(key)
-                        self.active_big_fire_key = None
+                    self._mark_fire_handled(coordinator.memory.big_fire_position)
                     coordinator.publish_fire_extinguished()
                     self._resume_normal_exploration()
 
@@ -659,6 +666,8 @@ class SearchRescueCoordinator:
                 within_radius=False,
                 first_detection=(existing is None),
             )
+        else:
+            self._start_marker_navigation(marker_id, position)
 
     def _finalize_marker_detection(self, marker_id: int, position: tuple, marker_info: dict, distance: float):
         """Rapporter markøren når roboten er innenfor ønsket radius."""
@@ -688,6 +697,8 @@ class SearchRescueCoordinator:
                 within_radius=True,
                 first_detection=not was_pending,
             )
+        else:
+            self._clear_active_marker_navigation(marker_id)
 
     def _distance_to_position(self, position: tuple) -> float:
         """Beregn avstand fra roboten til gitt posisjon."""
@@ -720,6 +731,9 @@ class SearchRescueCoordinator:
                     first_detection=False,
                 )
 
+        if self.active_marker_id is None:
+            self._start_next_pending_marker()
+
     def _handle_big_fire_detection(
         self,
         position: tuple,
@@ -729,6 +743,10 @@ class SearchRescueCoordinator:
     ):
         """Koordiner spesiallogikk for Big Fire-markøren."""
         big_fire_key = self._big_fire_key(position)
+
+        if self._is_fire_already_handled(position):
+            self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
+            return
 
         if big_fire_key in self.handled_big_fires:
             self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
@@ -904,6 +922,161 @@ class SearchRescueCoordinator:
         while angle < -math.pi:
             angle += 2 * math.pi
         return angle
+
+    def _start_marker_navigation(self, marker_id: int, position: Optional[tuple]):
+        """Start målrettet navigasjon til et ArUco-merke (ikke Big Fire)."""
+        if marker_id == 4:
+            return
+        if position is None:
+            return
+        if marker_id in self._processed_aruco_markers:
+            return
+        if self.big_fire_coordinator.should_handle_big_fire():
+            return
+
+        if self.active_marker_id is not None:
+            if self.active_marker_id == marker_id:
+                self.active_marker_goal = position
+                try:
+                    self.bug2_navigator.set_goal(position)
+                except Exception:
+                    pass
+            return
+
+        self.active_marker_id = marker_id
+        self.active_marker_goal = position
+        self.marker_navigation_start_time = self.get_time_seconds()
+
+        self.node.get_logger().info(
+            f'🎯 Navigerer mot ArUco ID {marker_id} for bekreftelse (mål={position}).'
+        )
+
+        try:
+            self.dfs_explorer.clear_current_goal()
+        except Exception:
+            pass
+        try:
+            self.wall_follower.stop_robot()
+        except Exception:
+            pass
+        try:
+            self.bug2_navigator.clear_goal()
+        except Exception:
+            pass
+        try:
+            self.bug2_navigator.set_goal(position)
+        except Exception:
+            self.node.get_logger().warn('🎯 Klarte ikke å sette BUG2-mål for ArUco-navigasjon.')
+
+    def _handle_active_marker_navigation(self, scan: LaserScan) -> bool:
+        """Fortsett navigasjon mot aktivt ArUco-merke. Returnerer True hvis håndtert."""
+        if self.active_marker_id is None or self.active_marker_goal is None:
+            return False
+
+        try:
+            self.bug2_navigator.set_goal(self.active_marker_goal)
+        except Exception:
+            pass
+
+        goal_reached = False
+        try:
+            goal_reached = self.bug2_navigator.navigate(scan)
+        except Exception as exc:
+            self.node.get_logger().warn(f'🎯 BUG2-feil under ArUco-navigasjon: {exc}')
+
+        aborted = False
+        try:
+            aborted = self.bug2_navigator.was_goal_aborted()
+        except Exception:
+            aborted = False
+
+        if aborted:
+            self.node.get_logger().warn(
+                f'🎯 ArUco ID {self.active_marker_id}: BUG2-abort. Prøver samme mål på nytt.'
+            )
+            try:
+                self.bug2_navigator.clear_goal()
+                self.bug2_navigator.set_goal(self.active_marker_goal)
+            except Exception:
+                pass
+            return True
+
+        distance = self._distance_to_position(self.active_marker_goal)
+        if goal_reached or (distance is not None and distance <= self.MARKER_CONFIRMATION_RADIUS):
+            try:
+                self.bug2_navigator.stop_robot()
+            except Exception:
+                pass
+            marker_id = self.active_marker_id
+            if marker_id not in self._processed_aruco_markers:
+                marker_info = self.marker_catalog.get(marker_id, {
+                    "label": "ukjent objekt",
+                    "points": 0,
+                })
+                self._finalize_marker_detection(
+                    marker_id,
+                    self.active_marker_goal,
+                    marker_info,
+                    distance if distance is not None else 0.0,
+                )
+        return True
+
+    def _clear_active_marker_navigation(self, marker_id: Optional[int] = None):
+        """Avslutt navigasjon mot aktivt ArUco-merke og gjenoppta normal modus."""
+        if self.active_marker_id is None:
+            return
+        if marker_id is not None and marker_id != self.active_marker_id:
+            return
+
+        try:
+            self.bug2_navigator.clear_goal()
+        except Exception:
+            pass
+        self.active_marker_id = None
+        self.active_marker_goal = None
+        self.marker_navigation_start_time = 0.0
+        self._start_next_pending_marker()
+
+    def _start_next_pending_marker(self):
+        """Start navigasjon mot neste ventende ArUco-merke dersom tilgjengelig."""
+        if self.active_marker_id is not None:
+            return
+        if self.big_fire_coordinator.should_handle_big_fire():
+            return
+
+        for marker_id, data in list(self.pending_marker_reports.items()):
+            if marker_id == 4:
+                continue
+            if marker_id in self._processed_aruco_markers:
+                continue
+            position = data.get('position')
+            if position is None:
+                continue
+            self._start_marker_navigation(marker_id, position)
+            break
+
+    def _mark_fire_handled(self, position: tuple):
+        """Registrer at en Big Fire er håndtert slik at vi ignorerer fremtidige observasjoner."""
+        if position is None:
+            return
+        key = self._big_fire_key(position)
+        if key not in self.handled_big_fires:
+            self.handled_big_fires.add(key)
+        if not any(
+            math.hypot(position[0] - existing[0], position[1] - existing[1]) <= self.HANDLED_FIRE_IGNORE_RADIUS / 2.0
+            for existing in self.handled_big_fire_positions
+        ):
+            self.handled_big_fire_positions.append((position[0], position[1]))
+        self.active_big_fire_key = None
+
+    def _is_fire_already_handled(self, position: tuple) -> bool:
+        """Returner True dersom vi har håndtert en brann nær denne posisjonen tidligere."""
+        if position is None:
+            return False
+        for handled in self.handled_big_fire_positions:
+            if math.hypot(position[0] - handled[0], position[1] - handled[1]) <= self.HANDLED_FIRE_IGNORE_RADIUS:
+                return True
+        return False
 
     def _robots_same_side_of_fire(self, fire_pos: tuple, my_pos: tuple, other_pos: tuple) -> bool:
         """
