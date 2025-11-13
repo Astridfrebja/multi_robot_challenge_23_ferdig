@@ -23,7 +23,6 @@ class ScoringClient:
     def __init__(self, node_ref: Node):
         self.node = node_ref
         
-        # Tillatte tjenestenavn (noen oppsett bruker namespace)
         self.service_names = [
             '/set_marker_position',
             '/scoring/set_marker_position',
@@ -35,12 +34,11 @@ class ScoringClient:
         self.node.get_logger().info(
             f'📊 ScoringClient initialisert (tjenester: {", ".join(self.service_names)})'
         )
-        
-        # Hold styr på hvilke markører som er rapportert
+   
         self.reported_markers = set()
         self.accepted_marker_ids = set()
         self.accepted_marker_positions = {}
-        self.pending_requests = []  # (future, marker_key, marker_id, original_position, reported_position, service_name, start_time)
+        self.pending_requests = []  
         self.pending_keys = set()
         self.pending_marker_ids = set()
         self.RESPONSE_TIMEOUT = 6.0

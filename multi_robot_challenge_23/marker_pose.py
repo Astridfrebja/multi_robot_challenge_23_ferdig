@@ -16,10 +16,11 @@ class MarkerMapPose(Node):
     def __init__(self):
         super().__init__('MarkerMapPose')
 
-        #Initiate a ROS parameter with a default value and then read the parameters value
+        #henter namespace fra parameter
         self.declare_parameter('namespace', 'tb3_5')
         self.namespace = self.get_parameter('namespace').get_parameter_value().string_value
 
+        #standardverdier for merkene
         self.marker_id = 1000
         self.marker_pose = Pose()
         self.marker_recieved = False
@@ -28,11 +29,10 @@ class MarkerMapPose(Node):
         self.marker_map_pose_pub = self.create_publisher(Pose, '/'+self.namespace+'/marker_map_pose', 10)
         self.marker_id_pub = self.create_publisher(Int64,'/'+self.namespace+'/marker_id', 10)
 
-        #Initialize a transform listener that is later used for looking up tranformations from one frame to another
         self.tf_buffer = Buffer()
         self.tf_listener = TransformListener(self.tf_buffer, self)
 
-        timer_period = 0.1  # seconds
+        timer_period = 0.1  
         self.timer = self.create_timer(timer_period, self.timer_callback)
 
 
@@ -46,7 +46,6 @@ class MarkerMapPose(Node):
         to_frame_rel = 'map'
         marker_id_msg = Int64()
 
-        #Lookup the tranformation from from_frame_rel to to_frame_rel
         try:
             self.trans_camera_map = self.tf_buffer.lookup_transform(to_frame_rel, from_frame_rel, rclpy.time.Time())
         except TransformException as ex:
@@ -54,7 +53,6 @@ class MarkerMapPose(Node):
                 f'Could not transform {to_frame_rel} to {from_frame_rel}: {ex}')
             return
 
-        #Tranform a Pose from from_frame_rel to to_frame_rel
         marker_map_pose = tf2_geometry_msgs.do_transform_pose(self.marker_pose, self.trans_camera_map)
 
         if self.marker_id != 1000:

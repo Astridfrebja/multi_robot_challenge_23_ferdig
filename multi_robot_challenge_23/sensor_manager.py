@@ -2,20 +2,13 @@
 
 # -*- coding: utf-8 -*-
 
-
 import math
-
 from rclpy.node import Node
-
 from sensor_msgs.msg import LaserScan
-
 from nav_msgs.msg import Odometry
-
 from std_msgs.msg import Int64
-
 from geometry_msgs.msg import Pose, Point
 
-from .occupancy_grid_manager import OccupancyGridManager
 
 
 class SensorManager:
@@ -61,17 +54,8 @@ class SensorManager:
         self.aruco_detection_radius = 2.0  # meter
 
 
-        # Occupancy grid manager
-
-        self.occupancy_grid_manager = OccupancyGridManager(node_ref)
-
-        
-
         # Setup subscribers
-
         self.setup_sensor_subscribers()
-
-        
 
         self.node.get_logger().info('📡 SensorManager initialisert')
 
@@ -528,74 +512,3 @@ class SensorManager:
 
         }
 
-
-    # --- OCCUPANCY GRID ACCESS METHODS ---
-
-    
-
-    def get_occupancy_grid_manager(self) -> OccupancyGridManager:
-
-        """Hent occupancy grid manager"""
-
-        return self.occupancy_grid_manager
-
-
-    def is_map_available(self) -> bool:
-
-        """Sjekk om map er tilgjengelig"""
-
-        return self.occupancy_grid_manager.is_map_available()
-
-
-    def get_map_info(self) -> dict:
-
-        """Hent map informasjon"""
-
-        return self.occupancy_grid_manager.get_map_info()
-
-
-    def world_to_map_coords(self, world_x: float, world_y: float) -> tuple:
-
-        """Konverter world koordinater til map koordinater"""
-
-        return self.occupancy_grid_manager.world_to_map(world_x, world_y)
-
-
-    def map_to_world_coords(self, map_x: int, map_y: int) -> tuple:
-
-        """Konverter map koordinater til world koordinater"""
-
-        return self.occupancy_grid_manager.map_to_world(map_x, map_y)
-
-
-    def is_obstacle_at_position(self, world_x: float, world_y: float) -> bool:
-
-        """Sjekk om det er hindring på world posisjon"""
-
-        map_x, map_y = self.world_to_map_coords(world_x, world_y)
-
-        return self.occupancy_grid_manager.is_obstacle(map_x, map_y)
-
-
-    def is_free_space_at_position(self, world_x: float, world_y: float) -> bool:
-
-        """Sjekk om det er fritt område på world posisjon"""
-
-        map_x, map_y = self.world_to_map_coords(world_x, world_y)
-
-        return self.occupancy_grid_manager.is_free_space(map_x, map_y)
-
-
-    def visualize_bounding_box(self):
-
-        """Visualiser map bounding box i RViz"""
-
-        self.occupancy_grid_manager.visualize_bounding_box() 
-
-    def has_line_of_sight(self, target_position: tuple, step: float = 0.05) -> bool:
-        """Sjekk om det er fri sikt fra roboten til mål i kartet."""
-        if not self.occupancy_grid_manager.is_map_available():
-            return True
-        start = Point(x=self.robot_position[0], y=self.robot_position[1], z=0.0)
-        end = Point(x=target_position[0], y=target_position[1], z=0.0)
-        return self.occupancy_grid_manager.has_line_of_sight(start, end, step) 

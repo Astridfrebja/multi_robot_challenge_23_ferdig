@@ -145,11 +145,11 @@ class SearchRescueCoordinator:
         Verdier er basert på DAT160-spesifikasjonen og kan justeres ved behov.
         """
         return {
-            0: {"label": "falsk brannindikator", "points": 100},
-            1: {"label": "falsk brannindikator", "points": 50},
-            2: {"label": "baby i fare", "points": 300},
-            3: {"label": "falsk brannindikator", "points": 50},
-            4: {"label": "storbrann", "points": 0},
+            0: {"label": "brannindikator", "points": 100},
+            1: {"label": "brannindikator", "points": 100},
+            2: {"label": "baby i fare", "points": 100},
+            3: {"label": "brannindikator", "points": 100},
+            4: {"label": "storbrann", "points": 100},
         }
 
     def _resume_normal_exploration(self):
@@ -226,7 +226,7 @@ class SearchRescueCoordinator:
         lx, ly = self.last_aruco_check_position
         dist = math.hypot(x - lx, y - ly)
         tdiff = now - self.last_aruco_check_time
-        # Utfør sveip hvis roboten har flyttet seg mer enn 2 m ELLER det har gått 5 s
+        # Utfør sveip hvis roboten har flyttet seg mer enn 4 m ELLER det har gått 30s
         if dist < self.aruco_check_distance and tdiff < self.aruco_check_interval:
             return False
 
@@ -450,7 +450,6 @@ class SearchRescueCoordinator:
             # Hent målet for Big Fire navigasjon
             target = self.big_fire_coordinator.get_target_position()
 
-            # KORRIGERT FEIL: Bruker den nye is_moving_to_fire metoden
             if target and self.robot_memory.is_moving_to_fire():
                 robot_pos = self.robot_memory.robot_position
                 distance_to_target = math.hypot(
@@ -488,7 +487,7 @@ class SearchRescueCoordinator:
                             self.node.get_logger().info('🔥 SUPPORTER: Bekrefter ankomst ved brannen.')
                         self.robot_memory.transition_to_extinguishing()
             else:
-                # Ingen bevegelse (Venter, slukker, eller nylig detektert)
+                # Ingen bevegelse 
                 self.bug2_navigator.stop_robot()
                 self.handle_big_fire_state_logic()
 
@@ -536,8 +535,6 @@ class SearchRescueCoordinator:
                 self.perform_aruco_rotation()
                 return
 
-            # Ny Logikk i SearchRescueCoordinator.process_scan
-
 
             # 1. Prioriter AKTIVT DFS-MÅL (Bug2 skal navigere)
             if self.dfs_explorer.has_active_goal():
@@ -582,8 +579,6 @@ class SearchRescueCoordinator:
         """Håndterer KUN tilstandsoverganger og publisering."""
         coordinator = self.big_fire_coordinator
         current_state = coordinator.memory.big_fire_state
-
-        # Merk: Siden koordinatoren og minneobjektet deler konstanter, kan vi bruke memory.KONSTANT
 
         if current_state == coordinator.memory.LEDER_WAITING:
             self.node.get_logger().info('🔥 LEDER: In LEDER_WAITING state!')

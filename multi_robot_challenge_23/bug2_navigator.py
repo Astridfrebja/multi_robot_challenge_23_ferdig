@@ -137,7 +137,6 @@ class Bug2Navigator:
         
         front_distance = self.regions.get('front', 10.0)
         
-        # Only log Go-To-Goal state every 20th time
         if not hasattr(self, '_go_to_goal_log_counter'):
             self._go_to_goal_log_counter = 0
         self._go_to_goal_log_counter += 1
@@ -149,7 +148,6 @@ class Bug2Navigator:
             )
         
         if front_distance < self.FRONT_THRESHOLD:
-            # TRANSISJON: GO_TO_GOAL -> WALL_FOLLOWING
             self.node.get_logger().warn(f"🛑 BUG2: Hinder funnet ({front_distance:.2f} m). Bytt til Wall Follow.")
             
             # Set M-line start point
@@ -163,7 +161,7 @@ class Bug2Navigator:
             self.state = self.WALL_FOLLOWING
             return
         
-        # DELEGER til GoalNavigator
+        # Delegerer til GoalNavigator
         self.goal_navigator.navigate_to_goal(msg) 
 
     def _wall_following_state(self, msg: LaserScan):
@@ -179,7 +177,6 @@ class Bug2Navigator:
             self.wall_follow_start_time = time.time()
         elapsed = time.time() - self.wall_follow_start_time
 
-        # Only log wall following state every 15th time
         if not hasattr(self, '_wall_follow_log_counter'):
             self._wall_follow_log_counter = 0
         self._wall_follow_log_counter += 1
@@ -190,7 +187,6 @@ class Bug2Navigator:
                 f'current_dist={current_dist_to_goal:.2f}, M_start_dist={self.M_start_dist_to_goal:.2f}'
             )
 
-        # Alternative exit: if front is clear and we're closer to goal, exit wall following
         front_distance = self.regions.get('front', 10.0)
         
         progress_ratio = (self.M_start_dist_to_goal - current_dist_to_goal) if self.M_start_dist_to_goal != float('inf') else 0.0
@@ -210,7 +206,6 @@ class Bug2Navigator:
             self.state = self.GO_TO_GOAL
             return
         elif front_distance > self.FRONT_THRESHOLD * 1.5 and is_closer_to_goal:
-            # Alternative exit: front is clear and we're closer to goal
             self.node.get_logger().warn(
                 f"✅ BUG2: Front fri og nærmere målet. Front: {front_distance:.2f}m, "
                 f"Nåværende avstand: {current_dist_to_goal:.2f}, M_start: {self.M_start_dist_to_goal:.2f}"
@@ -246,10 +241,10 @@ class Bug2Navigator:
             self.wall_follow_start_dist = float('inf')
             return
 
-        # Fortsett wall following - DELEGER til WallFollower
+        # Fortsett wall following 
         self.wall_follower.follow_wall(msg)
 
-    # --- BUG2 HELPER METHODS ---
+    # --- BUG2 HJELPE METODE ---
     
     def process_laser_scan(self, msg: LaserScan):
         """Process laser scan and update regions"""
@@ -280,11 +275,9 @@ class Bug2Navigator:
         # Vinkel mellom M-linjen og robotens siktlinje til målet
         angle_diff = abs(self.normalize_angle(angle_to_target - self.M_line_angle))
         
-        # Much more lenient angle tolerance (60 degrees instead of 20)
-        ANGLE_TOLERANCE_RAD = math.radians(60)  # Increased from 20 to 60 degrees
+        ANGLE_TOLERANCE_RAD = math.radians(60)  
         dist_to_goal = self.get_current_distance_to_goal()
         
-        # Simplified Bug2 Leave-kriterium - just check if we're closer and roughly on the right path
         if angle_diff < ANGLE_TOLERANCE_RAD and dist_to_goal < self.M_start_dist_to_goal:
             self.node.get_logger().info(f"🐛 Nær M-linjen: Vinkelavvik: {math.degrees(angle_diff):.1f} deg, Nåværende dist: {dist_to_goal:.2f} m.")
             return True

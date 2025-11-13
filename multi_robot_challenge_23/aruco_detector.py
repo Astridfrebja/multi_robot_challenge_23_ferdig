@@ -19,7 +19,6 @@ class ArUcoDetector:
         self.detected_markers = {}  # {marker_id: (x, y, timestamp)}
         self.current_marker_id = None
         
-        # Callback for ArUco detection
         self.aruco_callback = callback
         self.memory = memory
         
@@ -28,14 +27,11 @@ class ArUcoDetector:
     def process_detected_aruco(self, marker_id: int, position: tuple):
         """Ny inngangsfunksjon for å håndtere deteksjon én gang"""
         
-        # 1. KUN LOGG FØRSTE GANG
         if not self.memory.is_aruco_processed(marker_id):
             self.node.get_logger().info(f'📊 ArUco ID {marker_id} oppdaget på {position} - Utfører callback.')
-            
-            # 2. MARKER SOM BEHANDLET
+  
             self.memory.mark_aruco_processed(marker_id)
-            
-            # 3. KALL VIDERE LOGIKK
+        
             if self.aruco_callback:
                 self.aruco_callback(marker_id, position)
             else:
@@ -57,7 +53,6 @@ class ArUcoDetector:
             self.node.get_logger().info('🔥 BIG FIRE OPPDAGET!')
             return marker_id, position
         
-        # TODO: Kall scoring service for andre markers
         self.node.get_logger().info(f'📊 RAPPORTERER: ArUco ID {marker_id} på posisjon {position}')
         return marker_id, position
 

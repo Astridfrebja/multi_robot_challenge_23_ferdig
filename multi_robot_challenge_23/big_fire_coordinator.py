@@ -21,7 +21,7 @@ class BigFireCoordinator:
     SUPPORTER_GOING_TO_FIRE = "SUPPORTER_GOING_TO_FIRE"
     EXTINGUISHING = "EXTINGUISHING"
     
-    # Roles
+    # Roller
     LEDER = "LEDER"
     SUPPORTER = "SUPPORTER"
     
@@ -29,10 +29,8 @@ class BigFireCoordinator:
         self.node = node_ref
         self.robot_id = self.node.get_namespace().strip('/')
         
-        # Use shared RobotMemory for state management
         self.memory = robot_memory
         
-        # Communication
         self.setup_communication()
         
         self.node.get_logger().info(f'🔥 BigFireCoordinator ({self.robot_id}) initialisert')
@@ -40,32 +38,32 @@ class BigFireCoordinator:
 
     def setup_communication(self):
         """Sett opp kommunikasjon for Big Fire koordinering"""
-        # Publisher for Big Fire detection (global topic for cross-namespace communication)
+        # Publisher for Big Fire detection 
         self.big_fire_pub = self.node.create_publisher(
             String, '/big_fire_detected', 10
         )
         
-        # Subscriber for Big Fire detection (global topic for cross-namespace communication)
+        # Subscriber for Big Fire detection 
         self.big_fire_sub = self.node.create_subscription(
             String, '/big_fire_detected', self.big_fire_callback, 10
         )
         
-        # Publisher for robot position at fire (global topic for cross-namespace communication)
+        # Publisher for robot position at fire 
         self.fire_position_pub = self.node.create_publisher(
             String, '/robot_at_fire', 10
         )
         
-        # Subscriber for robot position at fire (global topic for cross-namespace communication)
+        # Subscriber for robot position at fire 
         self.fire_position_sub = self.node.create_subscription(
             String, '/robot_at_fire', self.robot_at_fire_callback, 10
         )
         
-        # Publisher for fire extinguished (global topic for cross-namespace communication)
+        # Publisher for fire extinguished 
         self.fire_extinguished_pub = self.node.create_publisher(
             String, '/fire_extinguished', 10
         )
         
-        # Subscriber for fire extinguished (global topic for cross-namespace communication)
+        # Subscriber for fire extinguished
         self.fire_extinguished_sub = self.node.create_subscription(
             String, '/fire_extinguished', self.fire_extinguished_callback, 10
         )
@@ -76,7 +74,7 @@ class BigFireCoordinator:
         is_new_detection = not self.memory.big_fire_logged
         
         if is_new_detection:
-            # Setter state KUN hvis den er ny
+            # Setter state kun hvis den er ny
             self.memory.set_big_fire_detected_by_me(position)
             
             # Publisering sendes kun ved ny deteksjon
@@ -89,9 +87,8 @@ class BigFireCoordinator:
     def big_fire_callback(self, msg: String):
         """Supporter mottar Big Fire melding fra Leder. Logger KUN første gangen per hendelse."""
         if "BIG_FIRE_DETECTED" in msg.data:
-            # Parse position and scout_id
             parts = msg.data.split(':')
-            if len(parts) < 3: return # Feil format
+            if len(parts) < 3: return 
             
             position = (float(parts[1]), float(parts[2]))
             scout_id = parts[3] if len(parts) > 3 else "unknown"
@@ -103,9 +100,9 @@ class BigFireCoordinator:
             # Sett tilstand og rolle i minnet
             self.memory.set_big_fire_detected_by_other(position)
             
-            # Logges KUN FØRSTE GANG
+            # Logges kun første gang
             self.node.get_logger().info(f'🔥 SUPPORTER: Mottok Big Fire melding fra {scout_id}!')
-            self.memory.big_fire_logged = True # Sett flagget etter logging
+            self.memory.big_fire_logged = True 
 
     def robot_at_fire_callback(self, msg: String):
         """Håndterer meldinger om at annen robot er ved/forlater brannen. Logger kun ved tilstandsskifte."""
@@ -181,7 +178,7 @@ class BigFireCoordinator:
         msg.data = f"{self.robot_id}:AT_FIRE"
         self.fire_position_pub.publish(msg)
         
-        if not self.memory.i_am_at_fire: # Logg kun ved tilstandsskifte
+        if not self.memory.i_am_at_fire: 
             self.memory.set_i_am_at_fire(True)
             self.node.get_logger().info('🔥 LEDER: Publiserer at jeg er ved brannen!')
 

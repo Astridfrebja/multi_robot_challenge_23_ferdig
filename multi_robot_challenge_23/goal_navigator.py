@@ -95,16 +95,15 @@ class GoalNavigator:
         # Sjekk om mål er nådd
         if self.is_goal_reached():
             self.node.get_logger().info('🎯 GOAL REACHED! (beholder mål)')
-            self.stop_robot()  # STOP roboten når målet er nådd
+            self.stop_robot()  
             return True
 
-        # Debug logging for navigation - reduced frequency
         if hasattr(self, '_debug_counter'):
             self._debug_counter += 1
         else:
             self._debug_counter = 1
         
-        if self._debug_counter % 100 == 0:  # Log hver 100. gang (much reduced frequency)
+        if self._debug_counter % 100 == 0:  
             distance = math.sqrt(
                 (self.target_position[0] - self.robot_position[0])**2 +
                 (self.target_position[1] - self.robot_position[1])**2
@@ -125,12 +124,11 @@ class GoalNavigator:
             (self.target_position[1] - self.robot_position[1])**2
         )
         
-        # Debug logging - reduced frequency
         if not hasattr(self, '_goal_check_counter'):
             self._goal_check_counter = 0
         self._goal_check_counter += 1
         
-        if self._goal_check_counter % 50 == 0:  # Log every 50th time
+        if self._goal_check_counter % 50 == 0: 
             self.node.get_logger().info(f'🎯 Goal check: robot=({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}), target=({self.target_position[0]:.2f}, {self.target_position[1]:.2f}), distance={distance:.3f}m, threshold={self.GOAL_THRESHOLD}m')
         
         return distance <= self.GOAL_THRESHOLD
@@ -145,7 +143,7 @@ class GoalNavigator:
         dy = self.target_position[1] - self.robot_position[1]
         distance_to_goal = math.sqrt(dx*dx + dy*dy)
         
-        # Hent sensor data - bruk sensor_manager hvis tilgjengelig
+        # Hent sensor data 
         if self.sensor_manager and self.sensor_manager.is_scan_valid():
             dL = self.sensor_manager.get_range_at_angle(+15.0)
             dR = self.sensor_manager.get_range_at_angle(-15.0)
@@ -184,7 +182,7 @@ class GoalNavigator:
             desired_heading = math.atan2(dy, dx)
             heading_error = desired_heading - self.robot_orientation
             
-            # Normaliser vinkel til [-π, π]
+            # Normaliser vinkel
             heading_error = self.normalize_angle(heading_error)
             
             # P-kontroll for heading

@@ -18,7 +18,6 @@ DEFAULT_YAW = 0.0
 
 
 class NamespaceInspector(Node):
-    """Helper node to inspect existing namespaces and determine next robot index."""
 
     def __init__(self):
         super().__init__('robot_namespace_inspector')

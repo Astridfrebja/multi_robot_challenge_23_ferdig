@@ -29,7 +29,7 @@ class WallFollower:
     TURN_LEFT_SPEED_LIN = 0.0 # Ingen fremoverfart under sving
     OPENING_THRESHOLD = 0.9
 
-    # Robot-robot encounter tidsparametre (alle roboter bruker samme mønster)
+    # Robot-robot møte tidsparametre 
     ENCOUNTER_BACK_SPEED = -0.25
     ENCOUNTER_BACK_DURATION = 1.0
     ENCOUNTER_HOLD_DURATION_PRIORITY = 0.4
@@ -51,22 +51,20 @@ class WallFollower:
         self.state = self.STATE_FOLLOW_WALL
         self.regions = {}
         
-        # Timing for state transitions
         self.state_start_time = None
-        self.turn_timeout = 3.0  # Maximum time to spend in TURN_LEFT
+        self.turn_timeout = 3.0  
         
         # Setup publisher
         from geometry_msgs.msg import Twist
         self.cmd_vel_publisher = self.node.create_publisher(Twist, 'cmd_vel', 10)
         
-        # State actions mapping
         self.state_actions = {
             self.STATE_TURN_LEFT: self.do_turn_left,
             self.STATE_FOLLOW_WALL: self.do_follow_wall,
             self.STATE_TURN_RIGHT: self.do_turn_right,
         }
         
-        # Robot encounter state (koordinert av SearchRescueCoordinator)
+        # Robot møte state 
         self._encounter_state = None
         self._encounter_mode = None
         self._encounter_start_time = 0.0
@@ -93,10 +91,8 @@ class WallFollower:
             self.stop_robot()
             return
 
-        # Process laser scan data
         self.process_laser_scan(msg)
         
-        # Take action based on current state
         self.take_action()
 
     def process_laser_scan(self, msg: LaserScan):
@@ -110,7 +106,7 @@ class WallFollower:
         def safe_min(slice_array):
             return np.min(slice_array) if len(slice_array) > 0 else self.MAX_RANGE
 
-        # Inndeling for veggfølging med 360 skanning
+        # Inndeling for veggfølging 
         base_regions = {
             'front': min(safe_min(ranges[0:int(n*0.05)]), safe_min(ranges[int(n*0.95):])),
             'right': safe_min(ranges[int(n*0.80):int(n*0.90)]),
@@ -154,7 +150,6 @@ class WallFollower:
         d_right = self.regions.get('right', self.MAX_RANGE)
         d_back_right = self.regions.get('back_right', self.MAX_RANGE)
         
-        # Check for timeout in TURN_LEFT state
         current_time = self.node.get_clock().now().nanoseconds / 1e9
         if self.state == self.STATE_TURN_LEFT and self.state_start_time is not None:
             elapsed = current_time - self.state_start_time
@@ -162,25 +157,24 @@ class WallFollower:
                 self.node.get_logger().warn(f"🧱 TURN_LEFT timeout ({elapsed:.1f}s), forcing FOLLOW_WALL")
                 return self.STATE_FOLLOW_WALL
         
-        # Only log regions when state changes or every 10th call
         if not hasattr(self, '_log_counter'):
             self._log_counter = 0
         self._log_counter += 1
         
-        if self._log_counter % 50 == 0:  # Log every 50th time
+        if self._log_counter % 50 == 0:  
             self.node.get_logger().info(
                 f"🧱 WallFollower regions: front={d_front:.2f}, right={d_right:.2f}, back_right={d_back_right:.2f}, current_state={self.state}"
             )
         
-        # Vegg foran - må snu unna
+        # Vegg foran, må snu unna
         if d_front < self.FRONT_THRESHOLD:
             return self.STATE_TURN_LEFT
         
-        # Veggen har stoppet (utvendig hjørne) – dreie mot veggen igjen
+        # Veggen har stoppet, dreie mot veggen igjen
         elif d_right > (self.WALL_DISTANCE + 0.4) and d_back_right > (self.WALL_DISTANCE + 0.4):
             return self.STATE_TURN_RIGHT
             
-        # Følg veggen - mer fleksibel overgang fra TURN_LEFT
+        # Følg veggen, mer fleksibel overgang fra TURN_LEFT
         else:
             # Hvis vi er i TURN_LEFT og front er nå fri, gå til FOLLOW_WALL
             if self.state == self.STATE_TURN_LEFT and d_front > self.FRONT_THRESHOLD:
@@ -216,8 +210,7 @@ class WallFollower:
     def take_action(self):
         """Take action based on current state"""
         new_state = self.decide_state()
-        
-        # Track state changes and timing
+
         if new_state != self.state:
             self.state = new_state
             self.state_start_time = self.node.get_clock().now().nanoseconds / 1e9
@@ -225,12 +218,12 @@ class WallFollower:
 
         state_str = {0: "TURN_LEFT", 1: "FOLLOW_WALL", 2: "TURN_RIGHT"}.get(self.state, "UNKNOWN")
         
-        # Only log state when it changes
+
         if not hasattr(self, '_last_logged_state') or self._last_logged_state != self.state:
             self.node.get_logger().info(f"🧱 WallFollower State: {state_str}")
             self._last_logged_state = self.state
 
-        # Get and execute the appropriate action function
+      
         action_function = self.state_actions.get(self.state)
         if action_function:
             twist_msg = action_function()
@@ -238,7 +231,6 @@ class WallFollower:
             self.node.get_logger().warn(f"🧱 Ukjent tilstand: {self.state}. Stopper.")
             twist_msg = Twist()
 
-        # Only log cmd_vel when it changes significantly
         if not hasattr(self, '_last_cmd_vel') or abs(twist_msg.linear.x - self._last_cmd_vel[0]) > 0.1 or abs(twist_msg.angular.z - self._last_cmd_vel[1]) > 0.1:
             self.node.get_logger().info(
                 f"🧱 Cmd_vel: linear.x={twist_msg.linear.x:.2f}, angular.z={twist_msg.angular.z:.2f}"
@@ -291,7 +283,7 @@ class WallFollower:
         Trekker svakt tilbake og roterer mot veggen.
         """
         lin = -0.05
-        ang = 0.4  # positiv = venstre
+        ang = 0.4  
         if self.follow_left:
             ang *= -1.0
         self.publish_twist(lin, ang)
@@ -312,7 +304,7 @@ class WallFollower:
             ang *= -1.0
         self.publish_twist(lin, ang)
 
-    # --- Robot encounter koordinator ---
+    # --- Robot møte koordinator ---
 
     def start_robot_encounter(self, mode: str):
         """
@@ -391,7 +383,7 @@ class WallFollower:
                 return False
             return True
 
-        # Ukjent state – avslutt for sikkerhets skyld
+        # Ukjent state, avslutt for sikkerhets skyld
         self.node.get_logger().warn(f'🧱 Encounter i ukjent tilstand {self._encounter_state}. Stopper.')
         self._finish_robot_encounter()
         return False
