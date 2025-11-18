@@ -80,12 +80,10 @@ def _spawn_robot_entities(context, package_name, world_file):
 def generate_launch_description():
     package_name = 'multi_robot_challenge_23'
 
-    # Get the path to the world, map and rviz configuration file
     world_file_path = os.path.join(get_package_share_directory(package_name), 'worlds', 'dat160_w3.world')
     map_file_path = os.path.join(get_package_share_directory(package_name), 'maps', 'map_dat160_w3.yaml')
     rviz_config_file_path = os.path.join(get_package_share_directory(package_name), 'rviz', 'model.rviz')
 
-    # Declaring use_sim_time as a launch argument that can then be used in all launch files
     sim_time_arg = DeclareLaunchArgument(
         'use_sim_time',
         default_value='true',
@@ -117,7 +115,6 @@ def generate_launch_description():
         description='Yaw (radians) applied to all spawned robots'
     )
 
-    # Get launch argument use_sim_time as a launch configuration object
     use_sim_time = LaunchConfiguration('use_sim_time')
 
     # Starting Gazebo
@@ -133,9 +130,9 @@ def generate_launch_description():
         name='map_server',
         output='screen',
         parameters=[{"yaml_filename": map_file_path, "topic_name": "map", "frame_id": "map"}],
-        # remappings=remappings
     )
-    # Starting a lifecycle manager that takes care of the map server
+    
+    # Starting a lifecycle manager
     lifecycle_manager = Node(
         package='nav2_lifecycle_manager',
         executable='lifecycle_manager',

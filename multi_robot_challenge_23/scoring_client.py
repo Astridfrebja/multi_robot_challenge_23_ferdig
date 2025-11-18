@@ -32,7 +32,7 @@ class ScoringClient:
             client = self.node.create_client(SetMarkerPosition, service_name)
             self.clients.append((service_name, client))
         self.node.get_logger().info(
-            f'📊 ScoringClient initialisert (tjenester: {", ".join(self.service_names)})'
+            f'ScoringClient initialisert (tjenester: {", ".join(self.service_names)})'
         )
    
         self.reported_markers = set()
@@ -64,10 +64,10 @@ class ScoringClient:
         # Unngå duplikater
         marker_key = str(marker_id)
         if marker_id in self.accepted_marker_ids:
-            self.node.get_logger().debug(f'📊 Marker {marker_id} allerede akseptert tidligere')
+            self.node.get_logger().debug(f'Marker {marker_id} allerede akseptert tidligere')
             return True
         if marker_key in self.reported_markers:
-            self.node.get_logger().debug(f'📊 Marker {marker_id} allerede forsøkt')
+            self.node.get_logger().debug(f'Marker {marker_id} allerede forsøkt')
             return True
         if marker_id in self.pending_marker_ids:
             return None
@@ -82,10 +82,10 @@ class ScoringClient:
                 service_name = name
                 break
         if available_client is None:
-            self.node.get_logger().error('❌ Fant ingen aktiv scoring-tjeneste!')
+            self.node.get_logger().error('Fant ingen aktiv scoring-tjeneste!')
             return False
         self.node.get_logger().info(
-            f'📊 Rapporterer via tjeneste {service_name} for marker {marker_id}'
+            f'Rapporterer via tjeneste {service_name} for marker {marker_id}'
         )
         
         # Lag forespørsel
@@ -101,7 +101,7 @@ class ScoringClient:
         request.marker_position.z = 0.0
         
         self.node.get_logger().info(
-            f'📊 Rapporterer ArUco ID {marker_id} på posisjon ({x_pos:.2f}, {y_pos:.2f})'
+            f'Rapporterer ArUco ID {marker_id} på posisjon ({x_pos:.2f}, {y_pos:.2f})'
         )
         
         # Send forespørsel asynkront
@@ -143,18 +143,18 @@ class ScoringClient:
                     response = future.result()
                     if response.accepted:
                         self.node.get_logger().info(
-                            f'✅ Scoring AKSEPTERT for marker {marker_id}!'
+                            f'Scoring AKSEPTERT for marker {marker_id}!'
                         )
                         self.reported_markers.add(marker_key)
                         self.accepted_marker_ids.add(marker_id)
                         self.accepted_marker_positions[marker_id] = reported_position
                     else:
                         self.node.get_logger().warn(
-                            f'⚠️ Scoring AVVIST for marker {marker_id}'
+                            f'Scoring AVVIST for marker {marker_id}'
                         )
                 except Exception as exc:
                     self.node.get_logger().error(
-                        f'❌ Feil ved scoring av marker {marker_id}: {exc}'
+                        f'Feil ved scoring av marker {marker_id}: {exc}'
                     )
                 finally:
                     self.pending_keys.discard(marker_key)
@@ -164,7 +164,7 @@ class ScoringClient:
             elapsed = (now - start_time).nanoseconds / 1e9
             if elapsed > self.RESPONSE_TIMEOUT:
                 self.node.get_logger().error(
-                    f'❌ Timeout ved scoring av marker {marker_id}. Prøver igjen senere.'
+                    f'Timeout ved scoring av marker {marker_id}. Prøver igjen senere.'
                 )
                 self.pending_keys.discard(marker_key)
                 self.pending_marker_ids.discard(marker_id)
@@ -178,11 +178,11 @@ class ScoringClient:
     def _load_marker_positions(self, world_file: str) -> dict:
         markers = {}
         if not world_file:
-            self.node.get_logger().warn('📊 world_file-parameter ikke satt. Rapporterer rå posisjoner.')
+            self.node.get_logger().warn('world_file-parameter ikke satt. Rapporterer rå posisjoner.')
             return markers
 
         if not os.path.isfile(world_file):
-            self.node.get_logger().warn(f'📊 Fant ikke world-fil: {world_file}. Rapporterer rå posisjoner.')
+            self.node.get_logger().warn(f'Fant ikke world-fil: {world_file}. Rapporterer rå posisjoner.')
             return markers
 
         try:
@@ -210,9 +210,9 @@ class ScoringClient:
                 markers[marker_id] = (pose_vals[0], pose_vals[1])
 
             if not markers:
-                self.node.get_logger().warn(f'📊 Fant ingen Marker-modeller i {world_file}.')
+                self.node.get_logger().warn(f'Fant ingen Marker-modeller i {world_file}.')
         except Exception as exc:
-            self.node.get_logger().warn(f'📊 Klarte ikke lese markerposisjoner fra {world_file}: {exc}')
+            self.node.get_logger().warn(f'Klarte ikke lese markerposisjoner fra {world_file}: {exc}')
 
         return markers
 
@@ -253,9 +253,7 @@ class ScoringClient:
             return (float(world_xy[0]), float(world_xy[1]))
 
         if marker_id in self.KNOWN_MARKERS:
-            # Bruk kjent posisjon inntil kalibrering er klar
             return self.KNOWN_MARKERS[marker_id]
-
-        # Ingen kalibrering tilgjengelig. Returner rå kartposisjon.
+        
         return (float(map_xy[0]), float(map_xy[1]))
 

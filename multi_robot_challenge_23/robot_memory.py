@@ -29,7 +29,7 @@ class RobotMemory:
         self.big_fire_detected_by_me = False
         self.big_fire_detected_by_other = False
         self.other_robot_at_fire = False
-        self.other_robot_position = None  # Posisjon til den andre roboten
+        self.other_robot_position = None  
         self.i_am_at_fire = False
         self.fire_extinguished = False
         self.big_fire_logged = False
@@ -123,10 +123,6 @@ class RobotMemory:
         result = (self.big_fire_detected_by_me or 
                   self.big_fire_detected_by_other or 
                   self.big_fire_state != self.NORMAL)
-        
-        # Debug logging fjernet for å redusere spam
-        # Aktiver kun ved debugging:
-        # print(f"🔥 should_handle_big_fire: result={result}")
         
         return result
 

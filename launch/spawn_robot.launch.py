@@ -11,10 +11,8 @@ from launch_ros.parameter_descriptions import ParameterValue
 import xacro
 
 
-# Name of the package that conatins the robot description xacro file
 package_name_robot = 'multi_robot_challenge_23'
 
-# Function to read the robot description from the xacro file and return a SetLaunchConfiguration object
 def get_robot_description(context):
     xacro_file_name = 'turtlebot3_waffle_pi.urdf.xacro'
     xacro_file_path = os.path.join(get_package_share_directory(package_name_robot), 'urdf', xacro_file_name)
@@ -31,7 +29,6 @@ def get_robot_description(context):
     return [SetLaunchConfiguration('robot_desc', robot_description)]
 
 def generate_launch_description():
-    #Declare launch arguments that can be set by a parent launch file
     namespace_launch_arg = DeclareLaunchArgument(
         'namespace',
         default_value='tb3_5'
@@ -54,18 +51,15 @@ def generate_launch_description():
         description='Use simulation (Gazebo) clock if true'
     )
 
-    #Read launch arguments as a launch configuration object
     namespace = LaunchConfiguration('namespace')
     x = LaunchConfiguration('x')
     y = LaunchConfiguration('y')
     yaw = LaunchConfiguration('yaw')
     use_sim_time = LaunchConfiguration('use_sim_time')
 
-    #Read out robot description from the xacro file and set it as a launch configuration
     robot_description_arg = OpaqueFunction(function=get_robot_description)
     robot_description = LaunchConfiguration('robot_desc')
 
-    # Start the state publisher for the robot
     robot_state_publisher = Node(
         package='robot_state_publisher',
         executable='robot_state_publisher',
@@ -78,7 +72,6 @@ def generate_launch_description():
         }],
     )
 
-    # Spawn the robot model in gazebo
     spawn_entity = Node(
         package='gazebo_ros', 
         executable='spawn_entity.py',
@@ -86,12 +79,10 @@ def generate_launch_description():
         arguments=['-topic', 'robot_description',
                     '-entity', namespace,
                     '-robot_namespace', namespace,
-                    # 'reference_frame', 'world',
                     '-x', x, '-y', y, '-Y', yaw],
         output='screen'
     )
     
-    # Set a static transformation from the robot's odometry frame to the global map frame
     odom_topic = [namespace,'/odom']
     tf_map_to_odom = Node(
         package='tf2_ros', executable='static_transform_publisher',
@@ -100,7 +91,6 @@ def generate_launch_description():
         arguments=['0.0', '0.0', '0.0', '0.0', '0.0', '0.0', 'map', odom_topic],
     )
 
-    # Start the aruco marker detection
     aruco_recognition = IncludeLaunchDescription(
         PythonLaunchDescriptionSource([os.path.join(get_package_share_directory(package_name_robot), 'launch'), '/aruco_recognition.launch.py']),
         launch_arguments={

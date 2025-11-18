@@ -67,7 +67,6 @@ class SearchRescueCoordinator:
         self._processed_aruco_markers = set()
         self.pending_marker_reports = {}
 
-        # Koble sensorens ArUco callback direkte til koordinatorens handler
         self.sensor_manager.aruco_callback = self.handle_aruco_detection
 
         try:
@@ -79,7 +78,7 @@ class SearchRescueCoordinator:
         follow_left = (robot_number % 2 == 1)
         self.wall_follower = WallFollower(node_ref, self.sensor_manager, follow_left=follow_left)
         side = 'venstre' if follow_left else 'høyre'
-        self.node.get_logger().info(f'🧱 WallFollower konfig: følger {side} vegg')
+        self.node.get_logger().info(f'WallFollower konfig: følger {side} vegg')
 
         self.goal_navigator = GoalNavigator(node_ref, self.sensor_manager)
         self.bug2_navigator = Bug2Navigator(node_ref, self.wall_follower, self.goal_navigator)
@@ -137,7 +136,7 @@ class SearchRescueCoordinator:
         self.marker_peek_hold_duration = 0.6
         self.marker_peek_timeout = 3.0
 
-        self.node.get_logger().info(f'🤖 SearchRescueCoordinator ({self.robot_id}) initialisert')
+        self.node.get_logger().info(f'SearchRescueCoordinator ({self.robot_id}) initialisert')
 
     def _build_marker_catalog(self) -> dict:
         """
@@ -172,7 +171,7 @@ class SearchRescueCoordinator:
             except Exception:
                 pass
 
-        self.node.get_logger().info('🔁 Big Fire håndtert. DFS og veggfølging gjenopptas.')
+        self.node.get_logger().info('Big Fire håndtert. DFS og veggfølging gjenopptas.')
 
     def _both_robots_within_fire_radius(self, radius: float = 2.0) -> bool:
         """True bare når begge roboter er nær nok OG på samme side (fri sikt til brannen)."""
@@ -199,7 +198,7 @@ class SearchRescueCoordinator:
 
         if not self._robots_same_side_of_fire(fire_pos, self.robot_position, other_pos):
             self.node.get_logger().info(
-                '🔥 Begge roboter er nær brannen, men ser ut til å stå på hver sin side. Venter.'
+                'Begge roboter er nær brannen, men ser ut til å stå på hver sin side. Venter.'
             )
             return False
 
@@ -226,7 +225,7 @@ class SearchRescueCoordinator:
         lx, ly = self.last_aruco_check_position
         dist = math.hypot(x - lx, y - ly)
         tdiff = now - self.last_aruco_check_time
-        # Utfør sveip hvis roboten har flyttet seg mer enn 4 m ELLER det har gått 30s
+        # Utfør sveip hvis roboten har flyttet seg mer enn 4 m eller det har gått 30s
         if dist < self.aruco_check_distance and tdiff < self.aruco_check_interval:
             return False
 
@@ -239,7 +238,7 @@ class SearchRescueCoordinator:
 
     def start_aruco_scan(self):
         """Start en periode hvor roboten roterer for å se etter ArUco-markører."""
-        self.node.get_logger().info(f'👀 Starter ArUco-sveip (pos={self.robot_position})')
+        self.node.get_logger().info(f'Starter ArUco-sveip (pos={self.robot_position})')
         self.is_doing_aruco_scan = True
         self.aruco_scan_start = time.time()
         self.pending_aruco_scan = False
@@ -278,9 +277,9 @@ class SearchRescueCoordinator:
             return
         else:
             progress = min(self.aruco_spin_accumulated / (2 * math.pi), 0.999)
-            stage = int(progress * 4)  # kvart-rundt-indikator
+            stage = int(progress * 4)  
             if self._aruco_spin_log_state != stage:
-                self.node.get_logger().info('👀 ArUco-sveip: roterer videre for dekning')
+                self.node.get_logger().info('ArUco-sveip: roterer videre for dekning')
                 self._aruco_spin_log_state = stage
 
         if not hasattr(self, '_aruco_cmd_pub'):
@@ -297,7 +296,7 @@ class SearchRescueCoordinator:
         self.aruco_spin_accumulated = 0.0
         self.aruco_last_yaw = None
         self._aruco_spin_log_state = None
-        self.node.get_logger().info('👁️ Ferdig ArUco-sveip — fortsetter normal navigasjon')
+        self.node.get_logger().info('Ferdig ArUco-sveip — fortsetter normal navigasjon')
 
     def _cancel_aruco_scan(self, reason: str = None):
         """Avbryt pågående ArUco-sveip og nullstill state."""
@@ -310,7 +309,7 @@ class SearchRescueCoordinator:
         self._aruco_spin_log_state = None
         self._stop_all_motion()
         if reason:
-            self.node.get_logger().info(f'👁️ ArUco-sveip avbrutt: {reason}')
+            self.node.get_logger().info(f'ArUco-sveip avbrutt: {reason}')
 
     def _stop_all_motion(self):
         """Publiser null-hastighet på alle kontrollere."""
@@ -362,7 +361,7 @@ class SearchRescueCoordinator:
         self.marker_peek_side = side
         self.marker_peek_start = time.time()
         direction = 'venstre' if side == 'LEFT' else 'høyre'
-        self.node.get_logger().info(f'👀 Marker-peek: inspiserer åpning mot {direction}')
+        self.node.get_logger().info(f'Marker-peek: inspiserer åpning mot {direction}')
         self._stop_all_motion()
         angular = self.marker_peek_rotation_speed if side == 'LEFT' else -self.marker_peek_rotation_speed
         self._publish_marker_peek_twist(angular)
@@ -377,7 +376,7 @@ class SearchRescueCoordinator:
         rotate_duration = self.marker_peek_angle / max(self.marker_peek_rotation_speed, 1e-3)
 
         if elapsed > self.marker_peek_timeout:
-            self.node.get_logger().warn('👀 Marker-peek: avbrutt (timeout).')
+            self.node.get_logger().warn('Marker-peek: avbrutt (timeout).')
             self._finish_marker_peek()
             return True
 
@@ -386,7 +385,7 @@ class SearchRescueCoordinator:
                 self.marker_peek_state = 'hold'
                 self.marker_peek_start = now
                 self._stop_all_motion()
-                self.node.get_logger().info('👀 Marker-peek: holder posisjon for markør-søk')
+                self.node.get_logger().info('Marker-peek: holder posisjon for markør-søk')
             else:
                 angular = self.marker_peek_rotation_speed if self.marker_peek_side == 'LEFT' else -self.marker_peek_rotation_speed
                 self._publish_marker_peek_twist(angular)
@@ -426,9 +425,9 @@ class SearchRescueCoordinator:
             direction = 'høyre'
         self._stop_all_motion()
         if direction:
-            self.node.get_logger().info(f'👀 Marker-peek fullført ({direction}). Fortsetter veggfølging.')
+            self.node.get_logger().info(f'Marker-peek fullført ({direction}). Fortsetter veggfølging.')
         else:
-            self.node.get_logger().info('👀 Marker-peek fullført. Fortsetter veggfølging.')
+            self.node.get_logger().info('Marker-peek fullført. Fortsetter veggfølging.')
         self.marker_peek_state = None
         self.marker_peek_side = None
         self.marker_peek_start = 0.0
@@ -460,7 +459,7 @@ class SearchRescueCoordinator:
                 threshold = self.bug2_navigator.GOAL_THRESHOLD + 0.15
                 if distance_to_target <= threshold:
                     self.node.get_logger().info(
-                        f'🔥 Allerede ved brannposisjon (d={distance_to_target:.2f} m). Stopper og oppdaterer tilstand.'
+                        f'Allerede ved brannposisjon (d={distance_to_target:.2f} m). Stopper og oppdaterer tilstand.'
                     )
                     self.bug2_navigator.stop_robot()
                     if self.robot_memory.my_role == self.robot_memory.LEDER:
@@ -468,23 +467,23 @@ class SearchRescueCoordinator:
                     else:
                         if not self.robot_memory.i_am_at_fire:
                             self.big_fire_coordinator.publish_robot_at_fire()
-                            self.node.get_logger().info('🔥 SUPPORTER: Bekrefter ankomst ved brannen.')
+                            self.node.get_logger().info('SUPPORTER: Bekrefter ankomst ved brannen.')
                         self.robot_memory.transition_to_extinguishing()
                     self.handle_big_fire_state_logic()
                     return
 
-                self.node.get_logger().info(f'🔥 BUG2: Target={target}. State={self.robot_memory.big_fire_state}')
+                self.node.get_logger().info(f'BUG2: Target={target}. State={self.robot_memory.big_fire_state}')
                 self.bug2_navigator.set_goal(target)
                 goal_reached = self.bug2_navigator.navigate(msg)
                 if goal_reached:
                     self.bug2_navigator.stop_robot()
-                    self.node.get_logger().info('🔥 BUG2: Mål nådd! Oppdaterer Big Fire state.')
+                    self.node.get_logger().info('BUG2: Mål nådd! Oppdaterer Big Fire state.')
                     if self.robot_memory.my_role == self.robot_memory.LEDER:
                         self.robot_memory.transition_to_leder_waiting()
                     else:
                         if not self.robot_memory.i_am_at_fire:
                             self.big_fire_coordinator.publish_robot_at_fire()
-                            self.node.get_logger().info('🔥 SUPPORTER: Bekrefter ankomst ved brannen.')
+                            self.node.get_logger().info('SUPPORTER: Bekrefter ankomst ved brannen.')
                         self.robot_memory.transition_to_extinguishing()
             else:
                 # Ingen bevegelse 
@@ -517,21 +516,21 @@ class SearchRescueCoordinator:
             self.dfs_explorer.register_openings(openings)
             if self.dfs_explorer.has_pending_goals():
                 self.node.get_logger().debug(
-                    f'🧭 DFS: stakkstørrelse={self.dfs_explorer.pending_goal_count()} (aktivt mål={self.dfs_explorer.has_active_goal()})'
+                    f'DFS: stakkstørrelse={self.dfs_explorer.pending_goal_count()} (aktivt mål={self.dfs_explorer.has_active_goal()})'
                 )
 
             front_distance = self.wall_follower.regions.get('front', self.wall_follower.MAX_RANGE)
             if self.handle_robot_avoidance(front_distance):
                 return
 
-            # --- ArUco-sveip: hvis kriterier møtes, start / utfør / avslutt sveip ---
+            # ArUco-sveip
             if self.is_doing_aruco_scan:
                 self.perform_aruco_rotation()
                 return
 
             if self.should_perform_aruco_scan():
                 self.start_aruco_scan()
-                # publish initial rotation immediately
+                
                 self.perform_aruco_rotation()
                 return
 
@@ -545,16 +544,16 @@ class SearchRescueCoordinator:
                     self.bug2_navigator.clear_goal()
                     self.dfs_explorer.goal_reached()
                     if goal_reached:
-                         self.node.get_logger().info('🧭 DFS: delmål nådd')
+                         self.node.get_logger().info('DFS: delmål nådd')
                     else:
-                         self.node.get_logger().warn('🧭 DFS: delmål utilgjengelig. Hopper videre.')
-                return # Fortsett å navigere eller prosesser neste syklus
+                         self.node.get_logger().warn('DFS: delmål utilgjengelig. Hopper videre.')
+                return 
 
-            # 2. Hvis ikke aktivt mål, men HAR VENTENDE MÅL (hent det neste)
+            # 2. Hvis ikke aktivt mål, men har ventende mål
             if self.dfs_explorer.has_pending_goals():
                 next_goal = self.dfs_explorer.next_goal()
                 if next_goal:
-                    self.node.get_logger().info(f'🧭 DFS: nytt delmål {next_goal}')
+                    self.node.get_logger().info(f'DFS: nytt delmål {next_goal}')
                     self.bug2_navigator.set_goal(next_goal)
                     # Gå til toppen av process_scan i neste syklus for å starte Bug2-navigasjon
                     return
@@ -581,15 +580,15 @@ class SearchRescueCoordinator:
         current_state = coordinator.memory.big_fire_state
 
         if current_state == coordinator.memory.LEDER_WAITING:
-            self.node.get_logger().info('🔥 LEDER: In LEDER_WAITING state!')
+            self.node.get_logger().info('LEDER: In LEDER_WAITING state!')
             if not coordinator.memory.i_am_at_fire:
                 coordinator.publish_robot_at_fire()
             if coordinator.memory.other_robot_at_fire:
                 coordinator.memory.transition_to_extinguishing()
-                self.node.get_logger().info('🔥 LEDER: Supporter ankommet - begynner slukking!')
+                self.node.get_logger().info('LEDER: Supporter ankommet - begynner slukking!')
 
         elif current_state == coordinator.memory.EXTINGUISHING:
-            self.node.get_logger().info('🔥 SLUKKING PÅGÅR!')
+            self.node.get_logger().info('SLUKKING PÅGÅR!')
             if coordinator.memory.fire_extinguished:
                 if coordinator.memory.big_fire_state != coordinator.memory.NORMAL:
                     coordinator.memory.transition_to_normal()
@@ -606,10 +605,10 @@ class SearchRescueCoordinator:
 
         elif current_state == coordinator.memory.NORMAL:
             if coordinator.memory.big_fire_detected_by_me:
-                self.node.get_logger().info('🔥 LEDER: Jeg oppdaget Big Fire - starter navigasjon!')
+                self.node.get_logger().info('LEDER: Jeg oppdaget Big Fire - starter navigasjon!')
                 coordinator.memory.transition_to_leder_going_to_fire()
             elif coordinator.memory.big_fire_detected_by_other:
-                self.node.get_logger().info('🔥 SUPPORTER: Mottok Big Fire melding - starter navigasjon!')
+                self.node.get_logger().info('SUPPORTER: Mottok Big Fire melding - starter navigasjon!')
                 coordinator.memory.transition_to_supporter_going_to_fire()
 
     def handle_aruco_detection(self, marker_id: int, position: tuple):
@@ -624,7 +623,7 @@ class SearchRescueCoordinator:
         distance = self._distance_to_position(position)
 
         self.node.get_logger().info(
-            f'🎯 ArUco merke ID {marker_id} ({marker_info["label"]}) observert på '
+            f'ArUco merke ID {marker_id} ({marker_info["label"]}) observert på '
             f'({position[0]:.2f}, {position[1]:.2f}) – avstand {distance:.2f} m'
         )
 
@@ -645,12 +644,12 @@ class SearchRescueCoordinator:
         if existing is None:
             if marker_id == 4:
                 self.node.get_logger().info(
-                    f'🔥 Big Fire registrert {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
+                    f'Big Fire registrert {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
                     'Fortsetter nærmere før stopp og rapportering.'
                 )
             else:
                 self.node.get_logger().info(
-                    f'🚶 Markør ID {marker_id} er {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
+                    f'Markør ID {marker_id} er {distance:.2f} m unna (> {self.MARKER_CONFIRMATION_RADIUS:.1f} m). '
                     'Venter med poengregistrering til roboten er innenfor 2.0 m.'
                 )
 
@@ -675,14 +674,14 @@ class SearchRescueCoordinator:
         self._processed_aruco_markers.add(marker_id)
 
         self.node.get_logger().info(
-            f'✅ ArUco ID {marker_id} ({marker_info["label"]}) er {distance:.2f} m unna '
+            f'ArUco ID {marker_id} ({marker_info["label"]}) er {distance:.2f} m unna '
             f'(<={self.MARKER_CONFIRMATION_RADIUS:.1f} m). Rapporterer til scoring-systemet.'
         )
 
         report_result = self.scoring_client.report_marker(marker_id, position)
         if report_result is False:
             self.node.get_logger().warn(
-                f'⚠️ Klarte ikke å rapportere ArUco ID {marker_id} til scoringstjenesten.'
+                f'Klarte ikke å rapportere ArUco ID {marker_id} til scoringstjenesten.'
             )
 
         if marker_id == 4:
@@ -740,18 +739,18 @@ class SearchRescueCoordinator:
         big_fire_key = self._big_fire_key(position)
 
         if self._is_fire_already_handled(position):
-            self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
+            self.node.get_logger().info('Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
             return
 
         if big_fire_key in self.handled_big_fires:
-            self.node.get_logger().info('🔥 Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
+            self.node.get_logger().info('Big Fire på denne posisjonen er allerede slukket. Ignorerer.')
             return
 
         self.active_big_fire_key = big_fire_key
 
         if first_detection:
             self.node.get_logger().info(
-                f'🔥 BIG FIRE oppdaget {distance:.2f} m unna. Aktiverer koordinator.'
+                f'BIG FIRE oppdaget {distance:.2f} m unna. Aktiverer koordinator.'
             )
 
         self._cancel_aruco_scan('Big Fire funnet')
@@ -764,7 +763,7 @@ class SearchRescueCoordinator:
         if within_radius:
             if self.robot_memory.my_role == self.robot_memory.LEDER:
                 self.node.get_logger().info(
-                    f'🛑 Leder ved Big Fire (avstand {distance:.2f} m). Stopper roboten og avventer samarbeid.'
+                    f'Leder ved Big Fire (avstand {distance:.2f} m). Stopper roboten og avventer samarbeid.'
                 )
                 self.bug2_navigator.stop_robot()
                 self.wall_follower.stop_robot()
@@ -774,14 +773,14 @@ class SearchRescueCoordinator:
                     self.big_fire_coordinator.publish_robot_at_fire()
             else:
                 self.node.get_logger().info(
-                    f'🔥 Supporter innenfor {self.MARKER_CONFIRMATION_RADIUS:.1f} m av Big Fire (avstand {distance:.2f} m).'
+                    f'Supporter innenfor {self.MARKER_CONFIRMATION_RADIUS:.1f} m av Big Fire (avstand {distance:.2f} m).'
                 )
                 if not self.robot_memory.i_am_at_fire:
                     self.big_fire_coordinator.publish_robot_at_fire()
         else:
             if first_detection:
                 self.node.get_logger().info(
-                    f'🔥 Fortsetter mot Big Fire til avstand er <= {self.MARKER_CONFIRMATION_RADIUS:.1f} m.'
+                    f'Fortsetter mot Big Fire til avstand er <= {self.MARKER_CONFIRMATION_RADIUS:.1f} m.'
                 )
 
     # --- Trafikkregler mellom roboter ---
@@ -839,7 +838,7 @@ class SearchRescueCoordinator:
         ):
             if self.avoidance_active:
                 self._reset_avoidance_state()
-                self.node.get_logger().info('🤝 Ingen annen robot i nærheten. Fortsetter normal drift.')
+                self.node.get_logger().info('Ingen annen robot i nærheten. Fortsetter normal drift.')
             return False
 
         other_x, other_y = self.robot_memory.other_robot_position
@@ -856,7 +855,7 @@ class SearchRescueCoordinator:
                     encounter_running = self.wall_follower.is_encounter_running()
             except Exception as exc:
                 encounter_running = False
-                self.node.get_logger().warn(f'🤝 Encounter update feilet: {exc}')
+                self.node.get_logger().warn(f'Encounter update feilet: {exc}')
 
             if not encounter_running or now >= self.avoidance_release_time:
                 self._reset_avoidance_state(cooldown=0.5)
@@ -880,11 +879,11 @@ class SearchRescueCoordinator:
         label = self.other_robot_id or 'ukjent'
         if mode == 'priority':
             self.node.get_logger().info(
-                f'🤝 Møter {label}. Har forkjørsrett, men rygger litt tilbake for å åpne passasje.'
+                f'Møter {label}. Har forkjørsrett, men rygger litt tilbake for å åpne passasje.'
             )
         else:
             self.node.get_logger().info(
-                f'🤝 Gir forkjørsrett til {label}. Rygger og venter før jeg fortsetter.'
+                f'Gir forkjørsrett til {label}. Rygger og venter før jeg fortsetter.'
             )
 
         self.wall_follower.start_robot_encounter(mode)
@@ -943,7 +942,7 @@ class SearchRescueCoordinator:
         self.marker_navigation_start_time = self.get_time_seconds()
 
         self.node.get_logger().info(
-            f'🎯 Navigerer mot ArUco ID {marker_id} for bekreftelse (mål={position}).'
+            f'Navigerer mot ArUco ID {marker_id} for bekreftelse (mål={position}).'
         )
 
         try:
@@ -961,7 +960,7 @@ class SearchRescueCoordinator:
         try:
             self.bug2_navigator.set_goal(position)
         except Exception:
-            self.node.get_logger().warn('🎯 Klarte ikke å sette BUG2-mål for ArUco-navigasjon.')
+            self.node.get_logger().warn('Klarte ikke å sette BUG2-mål for ArUco-navigasjon.')
 
     def _handle_active_marker_navigation(self, scan: LaserScan) -> bool:
         """Fortsett navigasjon mot aktivt ArUco-merke. Returnerer True hvis håndtert."""
@@ -977,7 +976,7 @@ class SearchRescueCoordinator:
         try:
             goal_reached = self.bug2_navigator.navigate(scan)
         except Exception as exc:
-            self.node.get_logger().warn(f'🎯 BUG2-feil under ArUco-navigasjon: {exc}')
+            self.node.get_logger().warn(f'BUG2-feil under ArUco-navigasjon: {exc}')
 
         aborted = False
         try:
@@ -987,7 +986,7 @@ class SearchRescueCoordinator:
 
         if aborted:
             self.node.get_logger().warn(
-                f'🎯 ArUco ID {self.active_marker_id}: BUG2-abort. Prøver samme mål på nytt.'
+                f'ArUco ID {self.active_marker_id}: BUG2-abort. Prøver samme mål på nytt.'
             )
             try:
                 self.bug2_navigator.clear_goal()

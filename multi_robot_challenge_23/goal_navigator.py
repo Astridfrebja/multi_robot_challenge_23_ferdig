@@ -32,19 +32,19 @@ class GoalNavigator:
         from geometry_msgs.msg import Twist
         self.cmd_vel_publisher = self.node.create_publisher(Twist, 'cmd_vel', 10)
         
-        self.node.get_logger().info('🎯 GoalNavigator initialisert')
+        self.node.get_logger().info('GoalNavigator initialisert')
 
     def set_goal(self, position: tuple):
         """Sett nytt mål for navigasjon"""
         self.target_position = position
         self.navigation_active = True
-        self.node.get_logger().info(f'🎯 Nytt mål satt: {position}')
+        self.node.get_logger().info(f'Nytt mål satt: {position}')
 
     def clear_goal(self):
         """Fjern aktivt mål"""
         self.target_position = None
         self.navigation_active = False
-        self.node.get_logger().info('🎯 Mål fjernet')
+        self.node.get_logger().info('Mål fjernet')
 
     def update_robot_pose(self, position: tuple, orientation: float):
         """Oppdater robot posisjon og orientering"""
@@ -71,7 +71,7 @@ class GoalNavigator:
 
         # Sjekk om mål er nådd
         if self.is_goal_reached():
-            self.node.get_logger().info('🎯 GOAL REACHED!')
+            self.node.get_logger().info('GOAL REACHED!')
             self.clear_goal()
             return True
 
@@ -94,7 +94,7 @@ class GoalNavigator:
 
         # Sjekk om mål er nådd
         if self.is_goal_reached():
-            self.node.get_logger().info('🎯 GOAL REACHED! (beholder mål)')
+            self.node.get_logger().info('GOAL REACHED! (beholder mål)')
             self.stop_robot()  
             return True
 
@@ -108,7 +108,7 @@ class GoalNavigator:
                 (self.target_position[0] - self.robot_position[0])**2 +
                 (self.target_position[1] - self.robot_position[1])**2
             )
-            self.node.get_logger().info(f'🎯 Navigating to goal: {self.target_position} from {self.robot_position} (distance: {distance:.2f}m)')
+            self.node.get_logger().info(f'Navigating to goal: {self.target_position} from {self.robot_position} (distance: {distance:.2f}m)')
 
         # Naviger mot mål
         self.go_to_goal_navigation(msg)
@@ -129,7 +129,7 @@ class GoalNavigator:
         self._goal_check_counter += 1
         
         if self._goal_check_counter % 50 == 0: 
-            self.node.get_logger().info(f'🎯 Goal check: robot=({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}), target=({self.target_position[0]:.2f}, {self.target_position[1]:.2f}), distance={distance:.3f}m, threshold={self.GOAL_THRESHOLD}m')
+            self.node.get_logger().info(f'Goal check: robot=({self.robot_position[0]:.2f}, {self.robot_position[1]:.2f}), target=({self.target_position[0]:.2f}, {self.target_position[1]:.2f}), distance={distance:.3f}m, threshold={self.GOAL_THRESHOLD}m')
         
         return distance <= self.GOAL_THRESHOLD
 
@@ -234,12 +234,11 @@ class GoalNavigator:
 
     def publish_twist(self, linear_x: float, angular_z: float):
         """Publiserer bevegelseskommandoer"""
-        # Only log when cmd_vel changes significantly
         if not hasattr(self, '_last_published_cmd'):
             self._last_published_cmd = (0.0, 0.0)
         
         if abs(linear_x - self._last_published_cmd[0]) > 0.1 or abs(angular_z - self._last_published_cmd[1]) > 0.1:
-            self.node.get_logger().info(f'🎯 Publishing cmd_vel: linear={linear_x:.2f}, angular={angular_z:.2f}')
+            self.node.get_logger().info(f'Publishing cmd_vel: linear={linear_x:.2f}, angular={angular_z:.2f}')
             self._last_published_cmd = (linear_x, angular_z)
         
         twist_msg = Twist()

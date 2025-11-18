@@ -6,7 +6,7 @@ import time
 from rclpy.node import Node
 from sensor_msgs.msg import LaserScan
 from .wall_follower import WallFollower
-from .goal_navigator import GoalNavigator # Antas å eksistere
+from .goal_navigator import GoalNavigator 
 
 class Bug2Navigator:
     """
@@ -54,7 +54,7 @@ class Bug2Navigator:
         self.LEAVE_ANGLE_TOLERANCE = math.radians(15.0)
         self.MIN_FRONT_CLEARANCE = 1.5
         
-        self.node.get_logger().info('🐛 Delegert Bug2Navigator initialisert')
+        self.node.get_logger().info('Delegert Bug2Navigator initialisert')
         self.goal_aborted = False
 
     def set_goal(self, position: tuple):
@@ -72,17 +72,15 @@ class Bug2Navigator:
         self.wall_follow_start_dist = float('inf')
         self.goal_aborted = False
         
-        # Reset M-line variables
         self.M_start_dist_to_goal = float('inf')
         self.M_start_x = 0.0
         self.M_start_y = 0.0
         
-        # Calculate M-line angle
         self.M_line_angle = math.atan2(self.target_y - self.start_y, self.target_x - self.start_x)
         
         self.goal_navigator.set_goal(position)
         
-        self.node.get_logger().info(f'🐛 BUG2: Nytt mål satt: {position}. Starter GO_TO_GOAL.')
+        self.node.get_logger().info(f'BUG2: Nytt mål satt: {position}. Starter GO_TO_GOAL.')
 
     def clear_goal(self):
         """Fjern aktivt mål og stopp bevegelse."""
@@ -117,7 +115,7 @@ class Bug2Navigator:
         # 1. Sjekk om mål er nådd
         current_dist_to_goal = self.get_current_distance_to_goal()
         if current_dist_to_goal < self.GOAL_THRESHOLD:
-            self.node.get_logger().info(f"🎯 Målet nådd! Avstand: {current_dist_to_goal:.2f}")
+            self.node.get_logger().info(f"Målet nådd! Avstand: {current_dist_to_goal:.2f}")
             self.stop_robot()
             return True
 
@@ -143,12 +141,12 @@ class Bug2Navigator:
         
         if self._go_to_goal_log_counter % 50 == 0:
             self.node.get_logger().info(
-                f'🎯 GO_TO_GOAL: front_dist={front_distance:.2f}m, threshold={self.FRONT_THRESHOLD}m, '
+                f'GO_TO_GOAL: front_dist={front_distance:.2f}m, threshold={self.FRONT_THRESHOLD}m, '
                 f'target={self.target_position}, robot={self.robot_position}'
             )
         
         if front_distance < self.FRONT_THRESHOLD:
-            self.node.get_logger().warn(f"🛑 BUG2: Hinder funnet ({front_distance:.2f} m). Bytt til Wall Follow.")
+            self.node.get_logger().warn(f"BUG2: Hinder funnet ({front_distance:.2f} m). Bytt til Wall Follow.")
             
             # Set M-line start point
             self.M_start_x = self.robot_position[0]
@@ -183,7 +181,7 @@ class Bug2Navigator:
         
         if self._wall_follow_log_counter % 30 == 0:
             self.node.get_logger().info(
-                f'🐛 WALL_FOLLOWING: on_m_line={is_on_line}, closer_to_goal={is_closer_to_goal}, '
+                f'WALL_FOLLOWING: on_m_line={is_on_line}, closer_to_goal={is_closer_to_goal}, '
                 f'current_dist={current_dist_to_goal:.2f}, M_start_dist={self.M_start_dist_to_goal:.2f}'
             )
 
@@ -199,7 +197,7 @@ class Bug2Navigator:
 
         if is_on_line and is_closer_to_goal:
             self.node.get_logger().warn(
-                f"✅ BUG2: Kan forlate vegg: På M-linjen OG nærmere målet. "
+                f"BUG2: Kan forlate vegg: På M-linjen OG nærmere målet. "
                 f"Nåværende avstand: {current_dist_to_goal:.2f}, "
                 f"M_start avstand: {self.M_start_dist_to_goal:.2f}"
             )
@@ -207,7 +205,7 @@ class Bug2Navigator:
             return
         elif front_distance > self.FRONT_THRESHOLD * 1.5 and is_closer_to_goal:
             self.node.get_logger().warn(
-                f"✅ BUG2: Front fri og nærmere målet. Front: {front_distance:.2f}m, "
+                f"BUG2: Front fri og nærmere målet. Front: {front_distance:.2f}m, "
                 f"Nåværende avstand: {current_dist_to_goal:.2f}, M_start: {self.M_start_dist_to_goal:.2f}"
             )
             self.state = self.GO_TO_GOAL
@@ -215,7 +213,7 @@ class Bug2Navigator:
         
         if current_dist_to_goal > (self.M_start_dist_to_goal + max_allowable): 
             self.node.get_logger().error(
-                f"❌ BUG2: Gikk for langt vekk fra målet ({current_dist_to_goal:.2f}m, grense {self.M_start_dist_to_goal + max_allowable:.2f}m). Stopper navigasjon."
+                f"BUG2: Gikk for langt vekk fra målet ({current_dist_to_goal:.2f}m, grense {self.M_start_dist_to_goal + max_allowable:.2f}m). Stopper navigasjon."
             )
             self.abort_goal()
             return
@@ -233,7 +231,7 @@ class Bug2Navigator:
 
         if can_leave:
             self.node.get_logger().info(
-                f"✅ BUG2: Forlater vegg – forbedring {improvement:.2f}m, front {front_distance:.2f}m, "
+                f"BUG2: Forlater vegg – forbedring {improvement:.2f}m, front {front_distance:.2f}m, "
                 f"vinkel {math.degrees(angle_diff):.1f}°, tid {elapsed:.1f}s"
             )
             self.state = self.GO_TO_GOAL
@@ -279,7 +277,7 @@ class Bug2Navigator:
         dist_to_goal = self.get_current_distance_to_goal()
         
         if angle_diff < ANGLE_TOLERANCE_RAD and dist_to_goal < self.M_start_dist_to_goal:
-            self.node.get_logger().info(f"🐛 Nær M-linjen: Vinkelavvik: {math.degrees(angle_diff):.1f} deg, Nåværende dist: {dist_to_goal:.2f} m.")
+            self.node.get_logger().info(f"Nær M-linjen: Vinkelavvik: {math.degrees(angle_diff):.1f} deg, Nåværende dist: {dist_to_goal:.2f} m.")
             return True
         return False
         

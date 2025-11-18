@@ -24,7 +24,7 @@ class MyRobotNode(Node):
 
         # Identifiser robot basert på namespace
         self.robot_id = self.get_namespace().strip('/')
-        self.get_logger().info(f'🤖 Robot identifisert som: {self.robot_id}')
+        self.get_logger().info(f'Robot identifisert som: {self.robot_id}')
         
         # Variabler for å lagre startposisjon
         self.start_position = None
@@ -33,7 +33,7 @@ class MyRobotNode(Node):
         # Initialiser refaktorert search & rescue coordinator
         self.navigation = SearchRescueCoordinator(self)
         
-        self.get_logger().info(f'🔍 S&R ROBOT ({self.robot_id}): Wall Following + BUG2 + GoTo Goal + ArUco Detection + Big Fire Coordination!')
+        self.get_logger().info(f'S&R ROBOT ({self.robot_id}): Wall Following + BUG2 + GoTo Goal + ArUco Detection + Big Fire Coordination!')
 
 
     def scan_callback(self, msg):
@@ -49,7 +49,7 @@ class MyRobotNode(Node):
                 'x': msg.pose.pose.position.x,
                 'y': msg.pose.pose.position.y
             }
-            self.get_logger().info(f'📍 Startposisjon lagret: x={self.start_position["x"]:.2f}, y={self.start_position["y"]:.2f}')
+            self.get_logger().info(f'Startposisjon lagret: x={self.start_position["x"]:.2f}, y={self.start_position["y"]:.2f}')
         
         # Send odometri-data til coordinator
         self.navigation.process_odom(msg)

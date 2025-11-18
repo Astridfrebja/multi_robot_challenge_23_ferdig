@@ -25,7 +25,7 @@ class ROSCommunicator:
         self.fire_position_sub = None
         self.fire_extinguished_sub = None
         
-        self.node.get_logger().info('📡 ROSCommunicator initialisert')
+        self.node.get_logger().info('ROSCommunicator initialisert')
 
     def setup_big_fire_publishers(self):
         """Sett opp Big Fire publishers"""

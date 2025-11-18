@@ -71,7 +71,7 @@ class WallFollower:
         self._encounter_state_start = 0.0
         self._encounter_logged_state = None
 
-        self.node.get_logger().info('🧱 WallFollower initialisert')
+        self.node.get_logger().info('WallFollower initialisert')
 
     def follow_wall(self, msg: LaserScan = None, target_direction=None):
         """
@@ -154,7 +154,7 @@ class WallFollower:
         if self.state == self.STATE_TURN_LEFT and self.state_start_time is not None:
             elapsed = current_time - self.state_start_time
             if elapsed > self.turn_timeout:
-                self.node.get_logger().warn(f"🧱 TURN_LEFT timeout ({elapsed:.1f}s), forcing FOLLOW_WALL")
+                self.node.get_logger().warn(f"TURN_LEFT timeout ({elapsed:.1f}s), forcing FOLLOW_WALL")
                 return self.STATE_FOLLOW_WALL
         
         if not hasattr(self, '_log_counter'):
@@ -163,7 +163,7 @@ class WallFollower:
         
         if self._log_counter % 50 == 0:  
             self.node.get_logger().info(
-                f"🧱 WallFollower regions: front={d_front:.2f}, right={d_right:.2f}, back_right={d_back_right:.2f}, current_state={self.state}"
+                f"WallFollower regions: front={d_front:.2f}, right={d_right:.2f}, back_right={d_back_right:.2f}, current_state={self.state}"
             )
         
         # Vegg foran, må snu unna
@@ -214,13 +214,13 @@ class WallFollower:
         if new_state != self.state:
             self.state = new_state
             self.state_start_time = self.node.get_clock().now().nanoseconds / 1e9
-            self.node.get_logger().info(f"🧱 State change to: {self.state}")
+            self.node.get_logger().info(f"State change to: {self.state}")
 
         state_str = {0: "TURN_LEFT", 1: "FOLLOW_WALL", 2: "TURN_RIGHT"}.get(self.state, "UNKNOWN")
         
 
         if not hasattr(self, '_last_logged_state') or self._last_logged_state != self.state:
-            self.node.get_logger().info(f"🧱 WallFollower State: {state_str}")
+            self.node.get_logger().info(f"WallFollower State: {state_str}")
             self._last_logged_state = self.state
 
       
@@ -228,12 +228,12 @@ class WallFollower:
         if action_function:
             twist_msg = action_function()
         else:
-            self.node.get_logger().warn(f"🧱 Ukjent tilstand: {self.state}. Stopper.")
+            self.node.get_logger().warn(f"Ukjent tilstand: {self.state}. Stopper.")
             twist_msg = Twist()
 
         if not hasattr(self, '_last_cmd_vel') or abs(twist_msg.linear.x - self._last_cmd_vel[0]) > 0.1 or abs(twist_msg.angular.z - self._last_cmd_vel[1]) > 0.1:
             self.node.get_logger().info(
-                f"🧱 Cmd_vel: linear.x={twist_msg.linear.x:.2f}, angular.z={twist_msg.angular.z:.2f}"
+                f"Cmd_vel: linear.x={twist_msg.linear.x:.2f}, angular.z={twist_msg.angular.z:.2f}"
             )
             self._last_cmd_vel = (twist_msg.linear.x, twist_msg.angular.z)
 
@@ -320,7 +320,7 @@ class WallFollower:
         # Hvis vi allerede er i en encounter, oppdater kun modusen ved behov
         if self._encounter_state is not None:
             if self._encounter_mode != mode:
-                self.node.get_logger().info(f'🧱 Encounter modus endret fra {self._encounter_mode} til {mode}.')
+                self.node.get_logger().info(f'Encounter modus endret fra {self._encounter_mode} til {mode}.')
                 self._encounter_mode = mode
             return
 
@@ -331,7 +331,7 @@ class WallFollower:
         self._encounter_logged_state = None
 
         self.node.get_logger().info(
-            f'🧱 Encounter ({mode}): rygger for å løse kollisjon.'
+            f'Encounter ({mode}): rygger for å løse kollisjon.'
         )
         self._publish_encounter_twist(self.ENCOUNTER_BACK_SPEED, 0.0)
 
@@ -346,7 +346,7 @@ class WallFollower:
         elapsed_total = now - self._encounter_start_time
 
         if elapsed_total >= self.ENCOUNTER_MAX_DURATION:
-            self.node.get_logger().warn('🧱 Encounter timeout – frigjør kontroll.')
+            self.node.get_logger().warn('Encounter timeout – frigjør kontroll.')
             self._finish_robot_encounter()
             return False
 
@@ -384,7 +384,7 @@ class WallFollower:
             return True
 
         # Ukjent state, avslutt for sikkerhets skyld
-        self.node.get_logger().warn(f'🧱 Encounter i ukjent tilstand {self._encounter_state}. Stopper.')
+        self.node.get_logger().warn(f'Encounter i ukjent tilstand {self._encounter_state}. Stopper.')
         self._finish_robot_encounter()
         return False
 
@@ -400,7 +400,7 @@ class WallFollower:
     def _log_encounter_state(self, message: str):
         if self._encounter_logged_state == self._encounter_state:
             return
-        self.node.get_logger().info(f'🧱 Encounter: {message}')
+        self.node.get_logger().info(f'Encounter: {message}')
         self._encounter_logged_state = self._encounter_state
 
     def _publish_encounter_twist(self, linear_x: float, angular_z: float):
@@ -411,7 +411,7 @@ class WallFollower:
 
     def _finish_robot_encounter(self, log: bool = True):
         if self._encounter_state is not None and log:
-            self.node.get_logger().info('🧱 Encounter ferdig – gjenopptar normal navigasjon.')
+            self.node.get_logger().info('Encounter ferdig – gjenopptar normal navigasjon.')
         self._encounter_state = None
         self._encounter_mode = None
         self._encounter_start_time = 0.0
